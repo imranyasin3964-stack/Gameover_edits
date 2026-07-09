@@ -445,8 +445,9 @@ def register(app: Client):
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
 async def _safe_edit(message: Message, text: str):
-    """Edit a message safely, ignoring any Telegram API errors."""
+    """Edit a message safely, logging any errors to stderr."""
     try:
         await message.edit_text(text, parse_mode=enums.ParseMode.HTML)
-    except Exception:
-        pass
+    except Exception as e:
+        import sys
+        print(f"[SafeEdit Error] Failed to edit message {message.id}: {e}", file=sys.stderr)
