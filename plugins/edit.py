@@ -17,6 +17,9 @@ from pyrogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
 )
 
 from config import Config
@@ -120,30 +123,58 @@ def register(app: Client):
 
         await query.answer(f"✅ {profile['label']} selected!")
 
-        await query.message.edit_text(
-            f"✅ <b>Quality Selected:</b> {profile['label']}\n"
-            f"⏱️ <b>Est. Render Time:</b> <code>{profile['est_min']}</code>\n\n"
-            f"📹 <b>Now send me the video you want to edit!</b>\n\n"
-            f"<i>• Send a normal video (not a document)\n"
-            f"• Max size: {Config.MAX_VIDEO_SIZE_MB} MB\n"
-            f"• Your state expires in 10 minutes</i>",
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        await client.send_message(
+            chat_id=chat_id,
+            text=(
+                f"✅ <b>Quality Selected:</b> {profile['label']}\n"
+                f"⏱️ <b>Est. Render Time:</b> <code>{profile['est_min']}</code>\n\n"
+                f"📹 <b>Now send me the video you want to edit!</b>\n\n"
+                f"<i>• Send a normal video (not a document)\n"
+                f"• Max size: {Config.MAX_VIDEO_SIZE_MB} MB\n"
+                f"• Your state expires in 10 minutes</i>"
+            ),
             parse_mode=enums.ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel")]
-            ]),
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("❌ Cancel")]
+            ], resize_keyboard=True)
         )
 
-    # ── Cancel Button ──────────────────────────────────────────────────────────
+    # ── Cancel Button & Message Handlers ────────────────────────────────────────
 
     @app.on_callback_query(filters.regex(r"^ge_cancel$"))
     async def cancel_callback(client: Client, query: CallbackQuery):
         user = query.from_user
         clear_state(user.id)
-        await query.answer("Cancelled!")
-        await query.message.edit_text(
-            "❌ <b>Cancelled.</b> Type /edit to start again.",
-            parse_mode=enums.ParseMode.HTML
+        await query.answer("❌ Cancelled!")
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await client.send_message(
+            chat_id=query.message.chat.id,
+            text="❌ <b>Cancelled.</b> Send /edit to start again.",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=ReplyKeyboardRemove()
         )
+
+    @app.on_message(filters.text & filters.regex(r"^❌ Cancel$") & filters.private)
+    async def cancel_message_handler(client: Client, message: Message):
+        user = message.from_user
+        if not user:
+            return
+        state = get_state(user.id)
+        if state:
+            clear_state(user.id)
+            await message.reply_text(
+                "❌ <b>Cancelled.</b> Send /edit to start again.",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=ReplyKeyboardRemove()
+            )
 
     # ── Video Message Handler ──────────────────────────────────────────────────
 
@@ -218,6 +249,7 @@ def register(app: Client):
             f"<b>File Size:</b> <code>{file_size_mb:.1f} MB</code>"
             f"{wait_note}",
             parse_mode=enums.ParseMode.HTML,
+            reply_markup=ReplyKeyboardRemove(),
         )
 
         job_id = uuid.uuid4().hex[:8]

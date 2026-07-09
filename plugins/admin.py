@@ -17,6 +17,9 @@ from pyrogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
 )
 
 from config import Config
@@ -89,24 +92,13 @@ def _get_disk_str() -> str:
 
 # ── Admin Keyboard Menu ─────────────────────────────────────────────────────────
 
-def _admin_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🖥️ Refresh Stats",    callback_data="admin_stats_refresh", style="primary"),
-            InlineKeyboardButton("🔍 Search User ID",   callback_data="admin_search_user", style="primary"),
-        ],
-        [
-            InlineKeyboardButton("💳 Add Credits",         callback_data="admin_manage_credits", style="primary"),
-            InlineKeyboardButton("📹 Change Start Video",  callback_data="admin_change_start_video", style="primary"),
-        ],
-        [
-            InlineKeyboardButton("👥 List Active VIPs",    callback_data="admin_list_vips", style="primary"),
-            InlineKeyboardButton("📢 Global Broadcast",    callback_data="admin_broadcast", style="success"),
-        ],
-        [
-            InlineKeyboardButton("❌ Close Panel",          callback_data="admin_close_panel", style="danger"),
-        ]
-    ])
+def _admin_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([
+        ["🖥️ Refresh Stats", "🔍 Search User ID"],
+        ["💳 Add Credits", "📹 Change Start Video"],
+        ["👥 List Active VIPs", "📢 Global Broadcast"],
+        ["❌ Close Panel"]
+    ], resize_keyboard=True)
 
 
 async def build_stats_caption(loop_idx: int = 0) -> str:
@@ -208,15 +200,11 @@ def register(app: Client):
             await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
             return
 
-        status_msg = await message.reply_text(
-            "📊 <b>Loading system statistics...</b>",
-            parse_mode=enums.ParseMode.HTML
-        )
         caption = await build_stats_caption()
-        await status_msg.edit_text(
+        await message.reply_text(
             caption,
             parse_mode=enums.ParseMode.HTML,
-            reply_markup=_admin_keyboard()
+            reply_markup=_admin_reply_keyboard()
         )
 
     # ── /give <user_id> [days]  (/addpremium alias) ────────────────────────────
@@ -367,122 +355,20 @@ def register(app: Client):
         data    = query.data
         chat_id = query.message.chat.id
 
-        # 1. Close Panel
-        if data == "admin_close_panel":
-            clear_state(owner_id)
-            await query.answer("Panel Closed!")
-            await query.message.delete()
-            return
-
         # 2. Back to Main Menu
-        elif data == "admin_back_main":
+        if data == "admin_back_main":
             clear_state(owner_id)
             await query.answer("Returned to Menu")
-            caption = await build_stats_caption()
-            await query.message.edit_text(
-                caption,
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=_admin_keyboard()
-            )
-
-        # 3. Refresh Stats
-        elif data == "admin_stats_refresh":
-            await query.answer("🔄 Refreshing stats...")
-            caption = await build_stats_caption()
             try:
-                await query.message.edit_text(
-                    caption,
-                    parse_mode=enums.ParseMode.HTML,
-                    reply_markup=_admin_keyboard()
-                )
+                await query.message.delete()
             except Exception:
                 pass
-
-        # 4. Search User ID
-        elif data == "admin_search_user":
-            await query.answer()
-            set_state(owner_id, "waiting_search_id", chat_id)
-            await query.message.edit_text(
-                "🔍 <b>Send the Numeric User ID to check status:</b>\n\n"
-                "<i>Please type or paste the User ID below:</i>",
+            caption = await build_stats_caption()
+            await client.send_message(
+                chat_id=chat_id,
+                text=caption,
                 parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
-                ])
-            )
-
-        # 5. Add Credits (interactive)
-        elif data == "admin_manage_credits":
-            await query.answer()
-            set_state(owner_id, "waiting_credit_amount", chat_id)
-            await query.message.edit_text(
-                "💳 <b>Add Custom Credits</b>\n\n"
-                "Send the <b>User ID</b> and <b>Amount</b> separated by space:\n"
-                "Format: <code>[User_ID] [Amount]</code>\n"
-                "Example: <code>12345678 10</code>\n\n"
-                "<i>(Send a negative value to subtract credits)</i>",
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
-                ])
-            )
-
-        # 6. List Active VIPs
-        elif data == "admin_list_vips":
-            await query.answer()
-            vips = list_premium_users()
-            if not vips:
-                vips_str = "<i>No active Premium subscribers.</i>"
-            else:
-                lines = []
-                for v in vips:
-                    uid = v["user_id"]
-                    try:
-                        expiry_dt = datetime.fromisoformat(v["expiry_date"])
-                        remaining = _time_remaining(expiry_dt)
-                        expiry_f  = _format_expiry(expiry_dt)
-                        lines.append(
-                            f"• <code>{uid}</code> — ⏳ <code>{remaining}</code> "
-                            f"<i>(until {expiry_f})</i>"
-                        )
-                    except Exception:
-                        lines.append(f"• <code>{uid}</code>")
-                vips_str = "\n".join(lines)
-
-            await query.message.edit_text(
-                f"💎 <b>Active Premium Subscribers ({len(vips)}):</b>\n\n{vips_str}",
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
-                ])
-            )
-
-        # 6.5. Change Start Video
-        elif data == "admin_change_start_video":
-            await query.answer()
-            set_state(owner_id, "waiting_start_video", chat_id)
-            await query.message.edit_text(
-                "📹 <b>Change Welcome /start Video</b>\n\n"
-                "Send or forward the video or GIF you want new users to see on /start.\n\n"
-                "<i>(The bot stores its Telegram File ID — loads instantly for all users.)</i>",
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
-                ])
-            )
-
-        # 6.6. Global Broadcast
-        elif data == "admin_broadcast":
-            await query.answer()
-            set_state(owner_id, "waiting_broadcast_msg", chat_id)
-            await query.message.edit_text(
-                "📢 <b>Global Broadcast to Users</b>\n\n"
-                "Please send or forward the message you want to broadcast to all users.\n"
-                "You can send text, photo, video, document, or audio. The bot will copy it to everyone.",
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
-                ])
+                reply_markup=_admin_reply_keyboard()
             )
 
         # 7. Action buttons on User Status card
@@ -567,9 +453,126 @@ def register(app: Client):
                 reply_markup=_user_action_keyboard(target_id)
             )
 
+    # ── Reply Keyboard Buttons Handler ──────────────────────────────────────────
+    ADMIN_BUTTONS = [
+        "🖥️ Refresh Stats",
+        "🔍 Search User ID",
+        "💳 Add Credits",
+        "📹 Change Start Video",
+        "👥 List Active VIPs",
+        "📢 Global Broadcast",
+        "❌ Close Panel"
+    ]
+
+    @app.on_message(
+        filters.chat(Config.OWNER_ID)
+        & filters.text
+        & filters.incoming
+    )
+    async def admin_buttons_handler(client: Client, message: Message):
+        text = message.text.strip()
+        if text not in ADMIN_BUTTONS:
+            return  # Allow other handlers to process input
+
+        owner_id = message.from_user.id
+        chat_id  = message.chat.id
+
+        if text == "🖥️ Refresh Stats":
+            caption = await build_stats_caption()
+            await message.reply_text(
+                caption,
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=_admin_reply_keyboard()
+            )
+
+        elif text == "❌ Close Panel":
+            clear_state(owner_id)
+            await message.reply_text(
+                "❌ <b>Admin panel closed.</b> Keyboard removed.",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=ReplyKeyboardRemove()
+            )
+
+        elif text == "🔍 Search User ID":
+            set_state(owner_id, "waiting_search_id", chat_id)
+            await message.reply_text(
+                "🔍 <b>Send the Numeric User ID to check status:</b>\n\n"
+                "<i>Please type or paste the User ID below:</i>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
+            )
+
+        elif text == "💳 Add Credits":
+            set_state(owner_id, "waiting_credit_amount", chat_id)
+            await message.reply_text(
+                "💳 <b>Add Custom Credits</b>\n\n"
+                "Send the <b>User ID</b> and <b>Amount</b> separated by space:\n"
+                "Format: <code>[User_ID] [Amount]</code>\n"
+                "Example: <code>12345678 10</code>\n\n"
+                "<i>(Send a negative value to subtract credits)</i>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
+            )
+
+        elif text == "📹 Change Start Video":
+            set_state(owner_id, "waiting_start_video", chat_id)
+            await message.reply_text(
+                "📹 <b>Change Welcome /start Video</b>\n\n"
+                "Send or forward the video or GIF you want new users to see on /start.\n\n"
+                "<i>(The bot stores its Telegram File ID — loads instantly for all users.)</i>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
+            )
+
+        elif text == "📢 Global Broadcast":
+            set_state(owner_id, "waiting_broadcast_msg", chat_id)
+            await message.reply_text(
+                "📢 <b>Global Broadcast to Users</b>\n\n"
+                "Please send or forward the message you want to broadcast to all users.\n"
+                "You can send text, photo, video, document, or audio. The bot will copy it to everyone.",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
+            )
+
+        elif text == "👥 List Active VIPs":
+            vips = list_premium_users()
+            if not vips:
+                vips_str = "<i>No active Premium subscribers.</i>"
+            else:
+                lines = []
+                for v in vips:
+                    uid = v["user_id"]
+                    try:
+                        expiry_dt = datetime.fromisoformat(v["expiry_date"])
+                        remaining = _time_remaining(expiry_dt)
+                        expiry_f  = _format_expiry(expiry_dt)
+                        lines.append(
+                            f"• <code>{uid}</code> — ⏳ <code>{remaining}</code> "
+                            f"<i>(until {expiry_f})</i>"
+                        )
+                    except Exception:
+                        lines.append(f"• <code>{uid}</code>")
+                vips_str = "\n".join(lines)
+
+            await message.reply_text(
+                f"💎 <b>Active Premium Subscribers ({len(vips)}):</b>\n\n{vips_str}",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=_admin_reply_keyboard()
+            )
+
+    # Filter to detect if the user has an active waiting state
+    def is_admin_waiting_state(_, __, message: Message) -> bool:
+        if not message.from_user:
+            return False
+        state = get_state(message.from_user.id)
+        if state and state.get("quality", "").startswith("waiting_"):
+            return True
+        return False
+
     # ── Message Input Handler (Handles all owner states: Search, Credits, Start Video, Broadcast) ──
     @app.on_message(
         filters.chat(Config.OWNER_ID)
+        & filters.create(is_admin_waiting_state)
         & ~filters.command(["admin", "stats", "start", "help", "premium",
                              "edit", "give", "addpremium", "removepremium",
                              "addcredits", "myplan"])
@@ -578,6 +581,17 @@ def register(app: Client):
         owner_id = message.from_user.id
         state    = get_state(owner_id)
         if not state:
+            return
+
+        # Handle cancel request
+        if message.text and message.text.strip() == "❌ Cancel":
+            clear_state(owner_id)
+            caption = await build_stats_caption()
+            await message.reply_text(
+                "❌ <b>Operation cancelled.</b>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=_admin_reply_keyboard()
+            )
             return
 
         step = state["quality"]
