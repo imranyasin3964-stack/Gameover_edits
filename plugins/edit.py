@@ -29,27 +29,15 @@ from core.queue import render_queue
 from core.renderer import render_video, QUALITY_PROFILES, INPUT_DIR
 
 
-# ── Inline Keyboard: Quality Selection ────────────────────────────────────────
+# ── Reply Keyboard: Quality Selection ────────────────────────────────────────
 
-def _quality_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            "🎬 /edit60 — 1080p 60fps  (Fast & Free)",
-            callback_data="ge_quality|edit60",
-            style="primary"
-        )],
-        [InlineKeyboardButton(
-            "🎥 /edit90 — 2K 60fps  (Balance Mode)",
-            callback_data="ge_quality|edit90",
-            style="primary"
-        )],
-        [InlineKeyboardButton(
-            "💎 /edit120 — 4K Beast Mode  (VIP 🔒)",
-            callback_data="ge_quality|edit120",
-            style="success"
-        )],
-        [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel", style="danger")],
-    ])
+def _quality_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([
+        ["🎬 1080p (Fast & Free)"],
+        ["🎥 2K (Balance Mode)"],
+        ["💎 4K Beast Mode (VIP)"],
+        ["❌ Cancel"]
+    ], resize_keyboard=True)
 
 
 # ── /edit Command ──────────────────────────────────────────────────────────────
@@ -83,61 +71,67 @@ def register(app: Client):
             f"💎 <b>/edit120</b> — 4K Beast Mode, 25-30 min, VIP Only\n\n"
             f"<i>After selecting, send the video you want to edit.</i>",
             parse_mode=enums.ParseMode.HTML,
-            reply_markup=_quality_keyboard(),
+            reply_markup=_quality_reply_keyboard(),
         )
 
-    # ── Quality Button Callback ────────────────────────────────────────────────
+    # ── Quality Buttons Message Handler ─────────────────────────────────────────
+    MAP_TEXT_TO_QUALITY = {
+        "🎬 1080p (Fast & Free)": "edit60",
+        "🎥 2K (Balance Mode)": "edit90",
+        "💎 4K Beast Mode (VIP)": "edit120",
+    }
 
-    @app.on_callback_query(filters.regex(r"^ge_quality\|"))
-    async def quality_callback(client: Client, query: CallbackQuery):
-        user     = query.from_user
-        quality  = query.data.split("|")[1]
-        profile  = QUALITY_PROFILES.get(quality)
+    @app.on_message(
+        filters.text
+        & filters.incoming
+        & filters.private
+    )
+    async def quality_selection_message_handler(client: Client, message: Message):
+        text = message.text.strip()
+        if text not in MAP_TEXT_TO_QUALITY:
+            return  # Allow other handlers to process it (like /admin buttons or Cancel)
 
+        user = message.from_user
+        if not user:
+            return
+
+        quality = MAP_TEXT_TO_QUALITY[text]
+        profile = QUALITY_PROFILES.get(quality)
         if not profile:
-            await query.answer("❌ Unknown quality!", show_alert=True)
             return
 
         # 4K Beast Mode: premium check
         if quality == "edit120" and not is_premium(user.id):
-            await query.answer(
-                "🔒 4K Beast Mode is a VIP Premium feature!\n"
+            await message.reply_text(
+                "🔒 <b>4K Beast Mode is a VIP Premium feature!</b>\n\n"
                 "It uses veryslow + spline36 + cinema colour grading (25-30 min).\n"
-                "Contact the admin to unlock!",
-                show_alert=True
+                "Please contact the admin to unlock!",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=_quality_reply_keyboard()
             )
             return
 
         # Check daily quota for free users
         if not can_edit(user.id, Config.DAILY_FREE_LIMIT):
-            await query.answer(
-                "❌ You've used your free edit for today.\n"
+            await message.reply_text(
+                "❌ <b>You've used your free edit for today.</b>\n\n"
                 "Come back tomorrow or get Premium for unlimited!",
-                show_alert=True
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=_quality_reply_keyboard()
             )
             return
 
         # Save user's quality choice in state
-        chat_id = query.message.chat.id
+        chat_id = message.chat.id
         set_state(user.id, quality, chat_id)
 
-        await query.answer(f"✅ {profile['label']} selected!")
-
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-        await client.send_message(
-            chat_id=chat_id,
-            text=(
-                f"✅ <b>Quality Selected:</b> {profile['label']}\n"
-                f"⏱️ <b>Est. Render Time:</b> <code>{profile['est_min']}</code>\n\n"
-                f"📹 <b>Now send me the video you want to edit!</b>\n\n"
-                f"<i>• Send a normal video (not a document)\n"
-                f"• Max size: {Config.MAX_VIDEO_SIZE_MB} MB\n"
-                f"• Your state expires in 10 minutes</i>"
-            ),
+        await message.reply_text(
+            f"✅ <b>Quality Selected:</b> {profile['label']}\n"
+            f"⏱️ <b>Est. Render Time:</b> <code>{profile['est_min']}</code>\n\n"
+            f"📹 <b>Now send me the video you want to edit!</b>\n\n"
+            f"<i>• Send a normal video (not a document)\n"
+            f"• Max size: {Config.MAX_VIDEO_SIZE_MB} MB\n"
+            f"• Your state expires in 10 minutes</i>",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup([
                 [KeyboardButton("❌ Cancel")]
@@ -167,14 +161,12 @@ def register(app: Client):
         user = message.from_user
         if not user:
             return
-        state = get_state(user.id)
-        if state:
-            clear_state(user.id)
-            await message.reply_text(
-                "❌ <b>Cancelled.</b> Send /edit to start again.",
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=ReplyKeyboardRemove()
-            )
+        clear_state(user.id)
+        await message.reply_text(
+            "❌ <b>Cancelled.</b> Send /edit to start again.",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=ReplyKeyboardRemove()
+        )
 
     # ── Video Message Handler ──────────────────────────────────────────────────
 

@@ -464,15 +464,17 @@ def register(app: Client):
         "❌ Close Panel"
     ]
 
+    def is_admin_button(_, __, message: Message) -> bool:
+        if not message.text:
+            return False
+        return message.text.strip() in ADMIN_BUTTONS
+
     @app.on_message(
         filters.chat(Config.OWNER_ID)
-        & filters.text
-        & filters.incoming
+        & filters.create(is_admin_button)
     )
     async def admin_buttons_handler(client: Client, message: Message):
         text = message.text.strip()
-        if text not in ADMIN_BUTTONS:
-            return  # Allow other handlers to process input
 
         owner_id = message.from_user.id
         chat_id  = message.chat.id
@@ -760,3 +762,36 @@ def register(app: Client):
                     [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )
+
+    @app.on_message(filters.command("logs") & filters.private)
+    async def logs_command(client: Client, message: Message):
+        if not message.from_user or not _is_owner(message.from_user.id):
+            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
+            return
+
+        log_file = "bot.log"
+        if not os.path.exists(log_file) or os.path.getsize(log_file) == 0:
+            await message.reply_text("ℹ️ <b>Log file is empty or does not exist.</b>", parse_mode=enums.ParseMode.HTML)
+            return
+
+        with open(log_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            preview = "".join(lines[-50:])
+
+        caption = "📋 <b>Recent Bot Logs (Last 50 lines):</b>"
+        if len(preview) > 4000:
+            preview = preview[-4000:]
+
+        await message.reply_text(
+            f"{preview}",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        try:
+            await message.reply_document(
+                document=log_file,
+                caption="📁 <b>Full System Log File (bot.log)</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception as e:
+            print(f"[Admin Plugin] Failed to send log file: {e}")

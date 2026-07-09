@@ -47,7 +47,7 @@ HELP_TEXT = """
 • <b>Free Users:</b> 1 render per day
 • <b>Premium Users:</b> Unlimited renders, Beast Mode unlocked 🔓
 
-For premium access, contact: @{owner}
+For premium access, contact: {owner}
 """.strip()
 
 
@@ -70,7 +70,7 @@ PREMIUM_TEXT = """
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 To get Premium access, contact the Admin directly:
 
-👑 <b>Admin:</b> @{owner_mention}
+👑 <b>Admin:</b> {owner_mention}
 
 <i>Mention you want GAMEOVER EDITS Premium!</i>
 """.strip()
@@ -153,28 +153,17 @@ def register(app: Client):
 
     @app.on_message(filters.command("help"))
     async def help_command(client: Client, message: Message):
-        # Get owner's username for contact info
-        try:
-            owner = await client.get_users(Config.OWNER_ID)
-            owner_mention = f"@{owner.username}" if owner.username else str(Config.OWNER_ID)
-        except Exception:
-            owner_mention = str(Config.OWNER_ID)
-
+        owner_link = f'<a href="tg://user?id={Config.OWNER_ID}">GameOver</a>'
         await message.reply_text(
-            HELP_TEXT.format(owner=owner_mention),
+            HELP_TEXT.format(owner=owner_link),
             parse_mode=enums.ParseMode.HTML,
         )
 
     @app.on_message(filters.command("premium"))
     async def premium_command(client: Client, message: Message):
-        try:
-            owner = await client.get_users(Config.OWNER_ID)
-            owner_mention = f"@{owner.username}" if owner.username else str(Config.OWNER_ID)
-        except Exception:
-            owner_mention = str(Config.OWNER_ID)
-
+        owner_link = f'<a href="tg://user?id={Config.OWNER_ID}">GameOver</a>'
         await message.reply_text(
-            PREMIUM_TEXT.format(owner_mention=owner_mention),
+            PREMIUM_TEXT.format(owner_mention=owner_link),
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -246,17 +235,13 @@ def register(app: Client):
 
         # ── Free User (or expired premium) ────────────────────────────────────
         edits_left = max(0, remaining) if remaining >= 0 else 0
-        try:
-            owner       = await client.get_users(Config.OWNER_ID)
-            owner_mention = f"@{owner.username}" if owner.username else str(Config.OWNER_ID)
-        except Exception:
-            owner_mention = str(Config.OWNER_ID)
-
         expired_note = ""
         if expiry_dt:
             # They had premium but it lapsed
             expired_str  = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
             expired_note = f"\n\n⚠️ Your last subscription expired on <code>{expired_str}</code>."
+
+        owner_link = f'<a href="tg://user?id={Config.OWNER_ID}">GameOver</a>'
 
         await message.reply_text(
             f"🆓 <b>Your Plan: FREE</b>\n\n"
@@ -265,7 +250,7 @@ def register(app: Client):
             f"❌ Limited to {Config.DAILY_FREE_LIMIT} render(s) per day"
             f"{expired_note}\n\n"
             f"💎 <b>Upgrade to Premium</b> for unlimited edits + 4K!\n"
-            f"Contact: {owner_mention}",
+            f"Contact: {owner_link}",
             parse_mode=enums.ParseMode.HTML,
         )
 
