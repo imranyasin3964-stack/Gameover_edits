@@ -9,10 +9,25 @@ import importlib
 
 from pyrogram import Client
 from pyrogram.types import BotCommand
+import pyrogram.types
+import inspect
 
 from config import Config
 from core.db import init_db
 from core.queue import render_queue
+
+# ── Monkeypatch InlineKeyboardButton to support styling ───────────────────────
+# Pyrofork and custom versions of Pyrogram support button styles (primary, success, danger)
+# to render button colors. We patch the constructor to prevent TypeErrors on standard Pyrogram.
+sig = inspect.signature(pyrogram.types.InlineKeyboardButton.__init__)
+if "style" not in sig.parameters:
+    original_init = pyrogram.types.InlineKeyboardButton.__init__
+    def patched_init(self, *args, **kwargs):
+        style = kwargs.pop("style", None)
+        original_init(self, *args, **kwargs)
+        if style is not None:
+            self.style = style
+    pyrogram.types.InlineKeyboardButton.__init__ = patched_init
 
 
 # ── Plugins to load (in order) ─────────────────────────────────────────────────

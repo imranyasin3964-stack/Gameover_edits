@@ -92,19 +92,19 @@ def _get_disk_str() -> str:
 def _admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🖥️ Refresh Stats",    callback_data="admin_stats_refresh"),
-            InlineKeyboardButton("🔍 Search User ID",   callback_data="admin_search_user"),
+            InlineKeyboardButton("🖥️ Refresh Stats",    callback_data="admin_stats_refresh", style="primary"),
+            InlineKeyboardButton("🔍 Search User ID",   callback_data="admin_search_user", style="primary"),
         ],
         [
-            InlineKeyboardButton("💳 Add Credits",         callback_data="admin_manage_credits"),
-            InlineKeyboardButton("📹 Change Start Video",  callback_data="admin_change_start_video"),
+            InlineKeyboardButton("💳 Add Credits",         callback_data="admin_manage_credits", style="primary"),
+            InlineKeyboardButton("📹 Change Start Video",  callback_data="admin_change_start_video", style="primary"),
         ],
         [
-            InlineKeyboardButton("👥 List Active VIPs",    callback_data="admin_list_vips"),
-            InlineKeyboardButton("📢 Global Broadcast",    callback_data="admin_broadcast"),
+            InlineKeyboardButton("👥 List Active VIPs",    callback_data="admin_list_vips", style="primary"),
+            InlineKeyboardButton("📢 Global Broadcast",    callback_data="admin_broadcast", style="success"),
         ],
         [
-            InlineKeyboardButton("❌ Close Panel",          callback_data="admin_close_panel"),
+            InlineKeyboardButton("❌ Close Panel",          callback_data="admin_close_panel", style="danger"),
         ]
     ])
 
@@ -177,22 +177,22 @@ def _user_action_keyboard(target_id: int) -> InlineKeyboardMarkup:
     """Action buttons shown on a user status card."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("➕ 5 Credits",  callback_data=f"admin_act|addcr|{target_id}|5"),
-            InlineKeyboardButton("➕ 10 Credits", callback_data=f"admin_act|addcr|{target_id}|10"),
+            InlineKeyboardButton("➕ 5 Credits",  callback_data=f"admin_act|addcr|{target_id}|5", style="primary"),
+            InlineKeyboardButton("➕ 10 Credits", callback_data=f"admin_act|addcr|{target_id}|10", style="primary"),
         ],
         [
-            InlineKeyboardButton("💎 Give 30d Premium",  callback_data=f"admin_act|give30|{target_id}"),
-            InlineKeyboardButton("💎 Give 7d Premium",   callback_data=f"admin_act|give7|{target_id}"),
+            InlineKeyboardButton("💎 Give 30d Premium",  callback_data=f"admin_act|give30|{target_id}", style="success"),
+            InlineKeyboardButton("💎 Give 7d Premium",   callback_data=f"admin_act|give7|{target_id}", style="success"),
         ],
         [
-            InlineKeyboardButton("💎 Give 1d Premium",   callback_data=f"admin_act|give1|{target_id}"),
-            InlineKeyboardButton("❌ Revoke Premium",     callback_data=f"admin_act|remvip|{target_id}"),
+            InlineKeyboardButton("💎 Give 1d Premium",   callback_data=f"admin_act|give1|{target_id}", style="success"),
+            InlineKeyboardButton("❌ Revoke Premium",     callback_data=f"admin_act|remvip|{target_id}", style="danger"),
         ],
         [
-            InlineKeyboardButton("🧹 Clear Credits",     callback_data=f"admin_act|clearcr|{target_id}"),
+            InlineKeyboardButton("🧹 Clear Credits",     callback_data=f"admin_act|clearcr|{target_id}", style="danger"),
         ],
         [
-            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main"),
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary"),
         ]
     ])
 
@@ -407,7 +407,7 @@ def register(app: Client):
                 "<i>Please type or paste the User ID below:</i>",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
+                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )
 
@@ -423,7 +423,7 @@ def register(app: Client):
                 "<i>(Send a negative value to subtract credits)</i>",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
+                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )
 
@@ -453,7 +453,7 @@ def register(app: Client):
                 f"💎 <b>Active Premium Subscribers ({len(vips)}):</b>\n\n{vips_str}",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
+                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )
 
@@ -467,7 +467,7 @@ def register(app: Client):
                 "<i>(The bot stores its Telegram File ID — loads instantly for all users.)</i>",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
+                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )
 
@@ -481,7 +481,7 @@ def register(app: Client):
                 "You can send text, photo, video, document, or audio. The bot will copy it to everyone.",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
+                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )
 
@@ -656,7 +656,7 @@ def register(app: Client):
                 f"💰 <b>New Balance:</b> <code>{new_total} credits</code>",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )
             try:
@@ -702,7 +702,7 @@ def register(app: Client):
                 f"❌ <b>Failed:</b> <code>{fail_count} users</code>",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )
 
@@ -743,6 +743,6 @@ def register(app: Client):
                 f"All new users will now see this on /start.",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main", style="primary")]
                 ])
             )

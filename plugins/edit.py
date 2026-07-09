@@ -32,17 +32,20 @@ def _quality_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(
             "🎬 /edit60 — 1080p 60fps  (Fast & Free)",
-            callback_data="ge_quality|edit60"
+            callback_data="ge_quality|edit60",
+            style="primary"
         )],
         [InlineKeyboardButton(
             "🎥 /edit90 — 2K 60fps  (Balance Mode)",
-            callback_data="ge_quality|edit90"
+            callback_data="ge_quality|edit90",
+            style="primary"
         )],
         [InlineKeyboardButton(
             "💎 /edit120 — 4K Beast Mode  (VIP 🔒)",
-            callback_data="ge_quality|edit120"
+            callback_data="ge_quality|edit120",
+            style="success"
         )],
-        [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel", style="danger")],
     ])
 
 
