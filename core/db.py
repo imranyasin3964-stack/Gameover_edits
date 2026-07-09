@@ -66,7 +66,10 @@ def init_db(db_path: str = DB_PATH):
 # ── Premium Management ─────────────────────────────────────────────────────────
 
 def is_premium(user_id: int) -> bool:
-    """Check if a user has premium (unlimited) access."""
+    """Check if a user has premium (unlimited) access. Owner is always premium."""
+    from config import Config
+    if user_id == Config.OWNER_ID:
+        return True
     with _connect() as conn:
         row = conn.execute(
             "SELECT 1 FROM premium_users WHERE user_id = ?", (user_id,)

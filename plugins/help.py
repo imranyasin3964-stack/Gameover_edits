@@ -92,7 +92,7 @@ def register(app: Client):
             f"🆓 <b>Status:</b> <code>FREE — {remaining} edit(s) remaining today</code>"
         )
 
-        await message.reply_text(
+        text = (
             f"👋 <b>Welcome, {name}!</b>\n\n"
             f"I'm <b>GAMEOVER EDITS</b> — your professional video rendering bot.\n\n"
             f"I take your raw videos and transform them into:\n"
@@ -102,9 +102,20 @@ def register(app: Client):
             f"All with <b>HDR color grading</b>, <b>pixel sharpening</b>, and a <b>GAMEOVER EDITS</b> watermark.\n\n"
             f"{status_line}\n\n"
             f"Type /edit to begin! 🚀\n"
-            f"Type /help for the full guide.",
-            parse_mode=enums.ParseMode.HTML,
+            f"Type /help for the full guide."
         )
+
+        if Config.START_VIDEO:
+            try:
+                if Config.START_VIDEO.endswith(".gif"):
+                    await message.reply_animation(Config.START_VIDEO, caption=text, parse_mode=enums.ParseMode.HTML)
+                else:
+                    await message.reply_video(Config.START_VIDEO, caption=text, parse_mode=enums.ParseMode.HTML)
+                return
+            except Exception as e:
+                print(f"[Help Plugin] ⚠️ Failed to send start video: {e}")
+
+        await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
 
     @app.on_message(filters.command("help"))
     async def help_command(client: Client, message: Message):

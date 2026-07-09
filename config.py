@@ -23,6 +23,9 @@ class Config:
     # Your personal Telegram User ID. Get it from @userinfobot
     OWNER_ID: int = int(os.getenv("OWNER_ID", 0))
 
+    # Optional welcoming video/GIF file path or URL for /start command
+    START_VIDEO: str = os.getenv("START_VIDEO", "")
+
     # ── Limits ─────────────────────────────────────────────────────────────────
     # How many free renders a normal user gets per day
     DAILY_FREE_LIMIT: int = 1

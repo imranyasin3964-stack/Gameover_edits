@@ -112,6 +112,35 @@ async def _get_video_duration(input_path: str) -> float:
         return 0.0
 
 
+import sys
+
+
+def _get_font_file() -> str:
+    """Return a valid font path depending on the operating system."""
+    # We import Config here to prevent circular import issues
+    from config import Config
+    if Config.WATERMARK_FONT and os.path.exists(Config.WATERMARK_FONT):
+        return Config.WATERMARK_FONT
+    
+    if sys.platform.startswith("win"):
+        # Windows standard font path
+        font_path = "C:/Windows/Fonts/arial.ttf"
+        if os.path.exists(font_path):
+            # Escape the colon for FFmpeg filter parameter: C\:/Windows/...
+            return font_path.replace(":", "\\:")
+    else:
+        # Linux standard font paths
+        for path in [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]:
+            if os.path.exists(path):
+                return path
+    return ""
+
+
 # ── Filter Chain Builder ───────────────────────────────────────────────────────
 
 def _build_filter_chain(profile: dict, watermark_text: str) -> str:
@@ -137,6 +166,9 @@ def _build_filter_chain(profile: dict, watermark_text: str) -> str:
           .replace("'",  "\\'")
           .replace(":",  "\\:"))
 
+    font_file = _get_font_file()
+    font_opt = f":fontfile='{font_file}'" if font_file else ""
+
     filters = [
         # 1. High-quality Lanczos upscale to target resolution
         f"scale={w}:{h}:flags=lanczos+accurate_rnd",
@@ -156,7 +188,7 @@ def _build_filter_chain(profile: dict, watermark_text: str) -> str:
         "unsharp=lx=3:ly=3:la=0.5:cx=3:cy=3:ca=0.2",
 
         # 6. Watermark — white, 45% opacity, 20px from bottom-right corner
-        f"drawtext=text='{wm}':fontsize=28:fontcolor=white@0.45"
+        f"drawtext=text='{wm}':fontsize=28:fontcolor=white@0.45{font_opt}"
         f":x=w-tw-20:y=h-th-20:shadowx=1:shadowy=1:shadowcolor=black@0.5",
 
         # 7. CRITICAL: Force yuv420p — prevents color banding on TVs/mobile
