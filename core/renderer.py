@@ -488,6 +488,10 @@ async def render_video(
 
                 bar = _make_progress_bar(pct)
 
+                # Parse speed
+                speed_match = re.search(r"speed=\s*([\d\.]+)x", line)
+                speed_str = speed_match.group(1) + "x" if speed_match else "1.0x"
+
                 # Live output file size
                 out_size_mb = 0.0
                 if os.path.exists(output_path):
@@ -497,7 +501,8 @@ async def render_video(
                     f"[Renderer {job_id}] {bar} | "
                     f"size: {out_size_mb:.1f}MB | "
                     f"elapsed: {_format_duration(elapsed)} | "
-                    f"ETA: {eta_str}"
+                    f"ETA: {eta_str} | "
+                    f"speed: {speed_str}"
                 )
 
                 if progress_callback and (now - last_cb_time) >= 3.0:
@@ -508,6 +513,7 @@ async def render_video(
                         "bar":     bar,
                         "elapsed": _format_duration(elapsed),
                         "eta":     eta_str,
+                        "speed":   speed_str,
                         "quality": profile["label"],
                         "size_mb": out_size_mb,
                     })

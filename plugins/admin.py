@@ -97,10 +97,13 @@ def _admin_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("💳 Add Credits",         callback_data="admin_manage_credits"),
-            InlineKeyboardButton("🎥 Change Start Video",  callback_data="admin_change_start_video"),
+            InlineKeyboardButton("📹 Change Start Video",  callback_data="admin_change_start_video"),
         ],
         [
-            InlineKeyboardButton("💎 List Active VIPs",    callback_data="admin_list_vips"),
+            InlineKeyboardButton("👥 List Active VIPs",    callback_data="admin_list_vips"),
+            InlineKeyboardButton("📢 Global Broadcast",    callback_data="admin_broadcast"),
+        ],
+        [
             InlineKeyboardButton("❌ Close Panel",          callback_data="admin_close_panel"),
         ]
     ])
@@ -459,9 +462,23 @@ def register(app: Client):
             await query.answer()
             set_state(owner_id, "waiting_start_video", chat_id)
             await query.message.edit_text(
-                "🎥 <b>Change Welcome /start Video</b>\n\n"
+                "📹 <b>Change Welcome /start Video</b>\n\n"
                 "Send or forward the video or GIF you want new users to see on /start.\n\n"
                 "<i>(The bot stores its Telegram File ID — loads instantly for all users.)</i>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
+                ])
+            )
+
+        # 6.6. Global Broadcast
+        elif data == "admin_broadcast":
+            await query.answer()
+            set_state(owner_id, "waiting_broadcast_msg", chat_id)
+            await query.message.edit_text(
+                "📢 <b>Global Broadcast to Users</b>\n\n"
+                "Please send or forward the message you want to broadcast to all users.\n"
+                "You can send text, photo, video, document, or audio. The bot will copy it to everyone.",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
@@ -550,9 +567,9 @@ def register(app: Client):
                 reply_markup=_user_action_keyboard(target_id)
             )
 
-    # ── Message Input Handler ──────────────────────────────────────────────────
+    # ── Message Input Handler (Handles all owner states: Search, Credits, Start Video, Broadcast) ──
     @app.on_message(
-        filters.chat(Config.OWNER_ID) & filters.text
+        filters.chat(Config.OWNER_ID)
         & ~filters.command(["admin", "stats", "start", "help", "premium",
                              "edit", "give", "addpremium", "removepremium",
                              "addcredits", "myplan"])
@@ -567,6 +584,10 @@ def register(app: Client):
 
         # A. User ID Search
         if step == "waiting_search_id":
+            if not message.text:
+                await message.reply_text("❌ <b>Please send a numeric User ID in text format!</b>", parse_mode=enums.ParseMode.HTML)
+                return
+
             clear_state(owner_id)
             try:
                 target_id = int(message.text.strip())
@@ -606,6 +627,10 @@ def register(app: Client):
 
         # B. Custom Credits Add
         elif step == "waiting_credit_amount":
+            if not message.text:
+                await message.reply_text("❌ <b>Format:</b> <code>[User_ID] [Amount]</code> in text format!", parse_mode=enums.ParseMode.HTML)
+                return
+
             clear_state(owner_id)
             parts = message.text.strip().split()
             if len(parts) < 2:
@@ -645,52 +670,79 @@ def register(app: Client):
             except Exception:
                 pass
 
-    # ── Media Handler: owner uploads new Start Video ───────────────────────────
-    @app.on_message(
-        filters.chat(Config.OWNER_ID)
-        & (filters.video | filters.animation | filters.document)
-    )
-    async def admin_media_handler(client: Client, message: Message):
-        owner_id = message.from_user.id
-        state    = get_state(owner_id)
-        if not state or state["quality"] != "waiting_start_video":
-            return
+        # C. Global Broadcast (Supports all media: text, photo, video, document, audio, etc.)
+        elif step == "waiting_broadcast_msg":
+            clear_state(owner_id)
+            status_msg = await message.reply_text("⏳ <b>Starting global broadcast...</b>", parse_mode=enums.ParseMode.HTML)
 
-        clear_state(owner_id)
-        file_id   = None
-        file_type = "video"
+            from core.db import _connect
+            with _connect() as conn:
+                rows = conn.execute("SELECT user_id FROM users").fetchall()
+                user_ids = [row["user_id"] for row in rows]
 
-        if message.video:
-            file_id   = message.video.file_id
-            file_type = "video"
-        elif message.animation:
-            file_id   = message.animation.file_id
-            file_type = "animation"
-        elif (
-            message.document
-            and message.document.mime_type
-            and message.document.mime_type.startswith(("video/", "image/gif"))
-        ):
-            file_id   = message.document.file_id
-            file_type = "document"
+            if not user_ids:
+                await status_msg.edit_text("❌ <b>No registered users found in the database!</b>", parse_mode=enums.ParseMode.HTML)
+                return
 
-        if not file_id:
-            await message.reply_text(
-                "❌ <b>Unsupported file! Please upload a video or GIF.</b>",
-                parse_mode=enums.ParseMode.HTML
+            success_count = 0
+            fail_count = 0
+
+            for uid in user_ids:
+                # Avoid rate limit, but broadcast to everyone
+                try:
+                    await message.copy(chat_id=uid)
+                    success_count += 1
+                except Exception:
+                    fail_count += 1
+                await asyncio.sleep(0.05)
+
+            await status_msg.edit_text(
+                f"📢 <b>Global Broadcast Completed!</b>\n\n"
+                f"✅ <b>Successful:</b> <code>{success_count} users</code>\n"
+                f"❌ <b>Failed:</b> <code>{fail_count} users</code>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
+                ])
             )
-            return
 
-        from core.db import set_setting
-        set_setting("start_video_file_id", file_id)
-        set_setting("start_video_type", file_type)
+        # D. Change Start Video
+        elif step == "waiting_start_video":
+            file_id   = None
+            file_type = "video"
 
-        await message.reply_text(
-            f"✅ <b>Welcome {file_type} updated successfully!</b>\n\n"
-            f"🔑 <b>File ID:</b> <code>{file_id[:25]}...{file_id[-10:]}</code>\n"
-            f"All new users will now see this on /start.",
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
-            ])
-        )
+            if message.video:
+                file_id   = message.video.file_id
+                file_type = "video"
+            elif message.animation:
+                file_id   = message.animation.file_id
+                file_type = "animation"
+            elif (
+                message.document
+                and message.document.mime_type
+                and message.document.mime_type.startswith(("video/", "image/gif"))
+            ):
+                file_id   = message.document.file_id
+                file_type = "document"
+
+            if not file_id:
+                await message.reply_text(
+                    "❌ <b>Unsupported file! Please upload a valid video or GIF.</b>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return
+
+            clear_state(owner_id)
+            from core.db import set_setting
+            set_setting("start_video_file_id", file_id)
+            set_setting("start_video_type", file_type)
+
+            await message.reply_text(
+                f"✅ <b>Welcome {file_type} updated successfully!</b>\n\n"
+                f"🔑 <b>File ID:</b> <code>{file_id[:25]}...{file_id[-10:]}</code>\n"
+                f"All new users will now see this on /start.",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
+                ])
+            )

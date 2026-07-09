@@ -156,6 +156,9 @@ def register(app: Client):
             return  # Ignore — user hasn't typed /edit yet
 
         quality = state["quality"]
+        if quality not in QUALITY_PROFILES:
+            return  # Ignore admin/broadcast inputs
+
         profile = QUALITY_PROFILES.get(quality)
         if not profile:
             clear_state(user.id)
@@ -221,20 +224,51 @@ def register(app: Client):
             input_path  = None
             output_path = None
 
+            def _make_progress_bar_chars(pct: float, length: int = 15) -> str:
+                filled = int(round(pct / 100 * length))
+                empty  = length - filled
+                return f"{'▰' * filled}{'▱' * empty}"
+
+            # Terminal variables
+            dl_status     = "Waiting..."
+            render_status = "Waiting..."
+            ul_status     = "Waiting..."
+
+            def build_terminal_text():
+                return (
+                    f"🖥️ <b>GAMEOVER EDITS TERMINAL</b>\n\n"
+                    f"<code>"
+                    f"📥 Downloading: {dl_status}\n"
+                    f"⚙️ Rendering:   {render_status}\n"
+                    f"📤 Uploading:   {ul_status}"
+                    f"</code>"
+                )
+
             try:
                 # ── Step 1: Download ───────────────────────────────────────────
-                await _safe_edit(status_msg,
-                    f"📥 <b>Downloading video...</b>\n\n"
-                    f"🆔 <b>Job ID:</b> <code>{job_id}</code>\n"
-                    f"🎬 <b>Quality:</b> {profile['label']}\n"
-                    f"[░░░░░░░░░░] 0%"
-                )
+                dl_status = "0.0 MB / 0.0 MB (0%)\n[▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱]"
+                await _safe_edit(status_msg, build_terminal_text())
 
                 ext         = ".mp4"
                 input_path  = os.path.join(INPUT_DIR, f"ge_in_{job_id}{ext}")
                 dl_start    = time.time()
+                last_edit_time = [time.time()]
 
-                await client.download_media(message, file_name=input_path)
+                async def dl_progress(current, total):
+                    nonlocal dl_status
+                    now = time.time()
+                    if now - last_edit_time[0] < 3.0:
+                        return
+                    last_edit_time[0] = now
+
+                    cur_mb = current / (1024 * 1024)
+                    tot_mb = total / (1024 * 1024)
+                    pct = (current / total) * 100 if total > 0 else 0
+                    bar = _make_progress_bar_chars(pct, 15)
+                    dl_status = f"{cur_mb:.1f} MB / {tot_mb:.1f} MB ({pct:.1f}%)\n[{bar}]"
+                    await _safe_edit(status_msg, build_terminal_text())
+
+                await client.download_media(message, file_name=input_path, progress=dl_progress)
 
                 if not os.path.exists(input_path) or os.path.getsize(input_path) < 1000:
                     await _safe_edit(status_msg, "❌ <b>Download failed. Please try again.</b>")
@@ -242,37 +276,27 @@ def register(app: Client):
 
                 dl_time = time.time() - dl_start
                 in_size = os.path.getsize(input_path) / (1024 * 1024)
+                dl_status = f"Done! [{in_size:.1f} MB in {dl_time:.0f}s]"
+                await _safe_edit(status_msg, build_terminal_text())
 
                 # ── Step 2: Render ─────────────────────────────────────────────
-                await _safe_edit(status_msg,
-                    f"⚙️ <b>Rendering...</b>\n\n"
-                    f"🆔 <b>Job ID:</b> <code>{job_id}</code>\n"
-                    f"🎬 <b>Quality:</b> {profile['label']}\n"
-                    f"📥 <b>Downloaded:</b> <code>{in_size:.1f} MB in {dl_time:.0f}s</code>\n"
-                    f"[░░░░░░░░░░] 0% — starting render..."
-                )
-
-                last_edit_time = [time.time()]
+                render_start = time.time()
+                render_status = "Starting..."
+                await _safe_edit(status_msg, build_terminal_text())
 
                 async def progress_cb(info: dict):
+                    nonlocal render_status
                     now = time.time()
-                    if now - last_edit_time[0] < 2.5:
+                    if now - last_edit_time[0] < 3.0:
                         return
                     last_edit_time[0] = now
 
-                    size_line = ""
-                    if "size_mb" in info and info["size_mb"] > 0:
-                        size_line = f"📦 <b>Output Size:</b> <code>{info['size_mb']:.1f} MB</code>\n"
-
-                    await _safe_edit(status_msg,
-                        f"{info['step']}\n\n"
-                        f"🆔 <b>Job ID:</b> <code>{job_id}</code>\n"
-                        f"🎬 <b>Quality:</b> {info['quality']}\n"
-                        f"<code>{info['bar']}</code>\n\n"
-                        f"⏱️ <b>Elapsed:</b> <code>{info['elapsed']}</code>\n"
-                        f"⏳ <b>ETA:</b> <code>{info['eta']}</code>\n"
-                        f"{size_line}"
-                    )
+                    pct   = info["pct"]
+                    speed = info.get("speed", "1.0x")
+                    eta   = info["eta"]
+                    bar   = _make_progress_bar_chars(pct, 15)
+                    render_status = f"{pct:.1f}% | Speed: {speed} | ETA: {eta}\n[{bar}]"
+                    await _safe_edit(status_msg, build_terminal_text())
 
                 output_path = await render_video(
                     input_path=input_path,
@@ -288,14 +312,28 @@ def register(app: Client):
                     )
                     return
 
-                # ── Step 3: Upload as Document ─────────────────────────────────
+                render_time = time.time() - render_start
                 out_size = os.path.getsize(output_path) / (1024 * 1024)
-                await _safe_edit(status_msg,
-                    f"📤 <b>Uploading your file...</b>\n\n"
-                    f"🎬 <b>Quality:</b> {profile['label']}\n"
-                    f"📦 <b>Size:</b> <code>{out_size:.1f} MB</code>\n"
-                    f"<i>Sending as Document to preserve full quality...</i>"
-                )
+                render_status = f"Done! [{out_size:.1f} MB in {render_time:.0f}s]"
+                await _safe_edit(status_msg, build_terminal_text())
+
+                # ── Step 3: Upload as Document ─────────────────────────────────
+                ul_status = "0.0 MB / 0.0 MB (0%)\n[▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱]"
+                await _safe_edit(status_msg, build_terminal_text())
+
+                async def ul_progress(current, total):
+                    nonlocal ul_status
+                    now = time.time()
+                    if now - last_edit_time[0] < 3.0:
+                        return
+                    last_edit_time[0] = now
+
+                    cur_mb = current / (1024 * 1024)
+                    tot_mb = total / (1024 * 1024)
+                    pct = (current / total) * 100 if total > 0 else 0
+                    bar = _make_progress_bar_chars(pct, 15)
+                    ul_status = f"{cur_mb:.1f} MB / {tot_mb:.1f} MB ({pct:.1f}%)\n[{bar}]"
+                    await _safe_edit(status_msg, build_terminal_text())
 
                 caption = (
                     f"🎬 <b>GAMEOVER EDITS</b>\n\n"
@@ -311,7 +349,11 @@ def register(app: Client):
                     caption=caption,
                     parse_mode=enums.ParseMode.HTML,
                     force_document=True,  # Never compress as video
+                    progress=ul_progress,
                 )
+
+                ul_status = "Done!"
+                await _safe_edit(status_msg, build_terminal_text())
 
                 # Record the edit in DB
                 record_edit(user.id)
