@@ -32,17 +32,20 @@ def _quality_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(
             "🎬 1080p — 60 FPS  (Fast & Free)",
-            callback_data="ge_quality|1080p60"
+            callback_data="ge_quality|1080p60",
+            style="success"
         )],
         [InlineKeyboardButton(
             "🎥 2K — 60 FPS  (High Quality)",
-            callback_data="ge_quality|2k60"
+            callback_data="ge_quality|2k60",
+            style="primary"
         )],
         [InlineKeyboardButton(
             "💎 4K — 120 FPS  (Beast Mode 🔒)",
-            callback_data="ge_quality|4k120"
+            callback_data="ge_quality|4k120",
+            style="primary"
         )],
-        [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel", style="danger")],
     ])
 
 
@@ -125,7 +128,7 @@ def register(app: Client):
             f"• Your state expires in 10 minutes</i>",
             parse_mode="html",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel")]
+                [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel", style="danger")]
             ]),
         )
 

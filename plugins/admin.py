@@ -11,13 +11,32 @@ from pyrogram.types import Message
 from config import Config
 from core.db import (
     add_premium, remove_premium, list_premium_users,
-    get_total_edits_today, get_all_time_total
+    get_total_edits_today, get_all_time_total,
+    add_credits, get_credits
 )
 from core.queue import render_queue
+import psutil
 
 
 def _is_owner(user_id: int) -> bool:
     return user_id == Config.OWNER_ID
+
+
+async def get_live_system_stats():
+    """Retrieve non-blocking live CPU, RAM, and network speeds."""
+    # Get initial values
+    cpu = psutil.cpu_percent(interval=None)
+    mem = psutil.virtual_memory().percent
+    net_1 = psutil.net_io_counters()
+    
+    # Wait 1 second asynchronously
+    await asyncio.sleep(1.0)
+    
+    net_2 = psutil.net_io_counters()
+    sent_speed_kb = (net_2.bytes_sent - net_1.bytes_sent) / 1024.0
+    recv_speed_kb = (net_2.bytes_recv - net_1.bytes_recv) / 1024.0
+    
+    return cpu, mem, sent_speed_kb, recv_speed_kb
 
 
 def register(app: Client):
@@ -126,36 +145,110 @@ def register(app: Client):
             parse_mode="html"
         )
 
-    # ── /stats ─────────────────────────────────────────────────────────────────
-    @app.on_message(filters.command("stats"))
+    # ── /addcredits <user_id> <amount> ──────────────────────────────────────────
+    @app.on_message(filters.command("addcredits"))
+    async def add_credits_cmd(client: Client, message: Message):
+        if not message.from_user or not _is_owner(message.from_user.id):
+            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode="html")
+            return
+
+        if len(message.command) < 3:
+            await message.reply_text(
+                "⚠️ <b>Usage:</b> <code>/addcredits &lt;user_id&gt; &lt;amount&gt;</code>\n"
+                "Example: <code>/addcredits 12345678 5</code>",
+                parse_mode="html"
+            )
+            return
+
+        try:
+            target_id = int(message.command[1])
+            amount = int(message.command[2])
+        except ValueError:
+            await message.reply_text("❌ <b>Invalid user ID or amount.</b>", parse_mode="html")
+            return
+
+        new_total = add_credits(target_id, amount)
+        await message.reply_text(
+            f"✅ <b>Successfully updated credits for <code>{target_id}</code>!</b>\n"
+            f"📊 <b>Change:</b> <code>{'+' if amount >= 0 else ''}{amount} credits</code>\n"
+            f"💰 <b>New Balance:</b> <code>{new_total} credits</code>",
+            parse_mode="html"
+        )
+        # Notify the user
+        try:
+            await client.send_message(
+                target_id,
+                f"🎁 <b>You have received {amount} custom render credits from the Admin!</b>\n"
+                f"💰 <b>Current Balance:</b> <code>{new_total} credits</code>\n\n"
+                f"Type /edit to use your credits!",
+                parse_mode="html"
+            )
+        except Exception:
+            pass
+
+    # ── /stats or /admin ───────────────────────────────────────────────────────
+    @app.on_message(filters.command(["stats", "admin"]))
     async def stats_cmd(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
             await message.reply_text("❌ <b>Owner only command!</b>", parse_mode="html")
             return
 
-        today_total   = get_total_edits_today()
-        alltime_total = get_all_time_total()
-        premium_count = len(list_premium_users())
-        queue_size    = render_queue.queue_size()
-        is_rendering  = render_queue.is_busy()
-
-        # Get CPU and disk stats if available
-        try:
-            import shutil
-            disk  = shutil.disk_usage("downloads")
-            disk_used_mb  = (disk.total - disk.free) / (1024 ** 2)
-            disk_total_mb = disk.total / (1024 ** 2)
-            disk_line = f"💾 <b>Disk:</b> <code>{disk_used_mb:.0f} MB / {disk_total_mb:.0f} MB used</code>"
-        except Exception:
-            disk_line = ""
-
-        await message.reply_text(
-            f"📊 <b>GAMEOVER EDITS — Bot Stats</b>\n\n"
-            f"🎬 <b>Renders Today:</b> <code>{today_total}</code>\n"
-            f"📈 <b>All-Time Renders:</b> <code>{alltime_total}</code>\n"
-            f"💎 <b>Premium Users:</b> <code>{premium_count}</code>\n\n"
-            f"⚙️ <b>Queue Status:</b> <code>{'🟢 Rendering now' if is_rendering else '⚪ Idle'}</code>\n"
-            f"📋 <b>Jobs Waiting:</b> <code>{queue_size}</code>\n"
-            f"{disk_line}",
+        status_msg = await message.reply_text(
+            "📊 <b>Fetching live system statistics...</b>",
             parse_mode="html"
         )
+
+        # Run live update loop for 60 seconds (20 iterations of 3 seconds each)
+        for i in range(20):
+            try:
+                today_total   = get_total_edits_today()
+                alltime_total = get_all_time_total()
+                premium_count = len(list_premium_users())
+                queue_size    = render_queue.queue_size()
+                is_rendering  = render_queue.is_busy()
+                curr_user     = render_queue.current_user()
+
+                # Get Live CPU, Memory, and Network Speeds (takes 1 second)
+                cpu, mem, up_kb, down_kb = await get_live_system_stats()
+
+                # Disk usage
+                try:
+                    import shutil
+                    disk = shutil.disk_usage("downloads")
+                    disk_used_mb = (disk.total - disk.free) / (1024 ** 2)
+                    disk_total_mb = disk.total / (1024 ** 2)
+                    disk_str = f"<code>{disk_used_mb:.1f} MB / {disk_total_mb:.1f} MB</code>"
+                except Exception:
+                    disk_str = "N/A"
+
+                queue_user_str = f" (User: <code>{curr_user}</code>)" if curr_user else ""
+
+                caption = (
+                    f"📊 <b>GAMEOVER EDITS — Live Server Panel</b>\n"
+                    f"<i>⏱️ Auto-refreshing live (Update {i+1}/20)...</i>\n\n"
+                    f"📈 <b>Renders Today:</b> <code>{today_total}</code>\n"
+                    f"🎬 <b>All-Time Renders:</b> <code>{alltime_total}</code>\n"
+                    f"💎 <b>Premium Users:</b> <code>{premium_count}</code>\n\n"
+                    f"🖥️ <b>CPU Usage:</b> <code>{cpu}%</code>\n"
+                    f"💾 <b>RAM Usage:</b> <code>{mem}%</code>\n"
+                    f"📊 <b>Disk Space:</b> {disk_str}\n\n"
+                    f"🚀 <b>Network Upload:</b> <code>{up_kb:.1f} KB/s</code>\n"
+                    f"📥 <b>Network Download:</b> <code>{down_kb:.1f} KB/s</code>\n\n"
+                    f"⚙️ <b>Queue Status:</b> <code>{'🟢 Rendering' if is_rendering else '⚪ Idle'}</code>{queue_user_str}\n"
+                    f"📋 <b>Jobs Waiting:</b> <code>{queue_size}</code>"
+                )
+
+                await status_msg.edit_text(caption, parse_mode="html")
+                await asyncio.sleep(2.0)  # Wait 2 seconds before next poll (total loop time = 3 seconds)
+            except Exception as loop_err:
+                print(f"[Admin Loop Stats Error] {loop_err}")
+                break
+
+        # Final update to show loop ended
+        try:
+            await status_msg.edit_text(
+                status_msg.text.replace("Auto-refreshing live", "Live refresh paused (Type /admin to refresh again)"),
+                parse_mode="html"
+            )
+        except Exception:
+            pass

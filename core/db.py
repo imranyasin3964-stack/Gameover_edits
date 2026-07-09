@@ -50,6 +50,13 @@ def init_db(db_path: str = DB_PATH):
                 added_by    INTEGER,            -- Admin who added this user
                 added_at    TEXT NOT NULL        -- ISO timestamp
             );
+
+            -- Tracks custom credits given to standard users
+            CREATE TABLE IF NOT EXISTS user_credits (
+                user_id     INTEGER PRIMARY KEY,
+                credits     INTEGER NOT NULL DEFAULT 0,
+                updated_at  TEXT NOT NULL
+            );
         """)
         conn.commit()
 
@@ -101,6 +108,49 @@ def list_premium_users() -> list[int]:
         return [row["user_id"] for row in rows]
 
 
+# ── Custom Credits Management ──────────────────────────────────────────────────
+
+def get_credits(user_id: int) -> int:
+    """Return custom credits of a user. Default is 0."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT credits FROM user_credits WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row["credits"] if row else 0
+
+
+def add_credits(user_id: int, amount: int) -> int:
+    """
+    Add or set custom credits for a user. Returns new total.
+    """
+    current = get_credits(user_id)
+    new_total = max(0, current + amount)
+    with _connect() as conn:
+        conn.execute("""
+            INSERT INTO user_credits (user_id, credits, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET credits = ?, updated_at = ?
+        """, (user_id, new_total, datetime.now(timezone.utc).isoformat(), new_total, datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+    return new_total
+
+
+def use_credit(user_id: int) -> bool:
+    """
+    Decrement a user's custom credits by 1. Returns True if successful.
+    """
+    current = get_credits(user_id)
+    if current <= 0:
+        return False
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE user_credits SET credits = credits - 1, updated_at = ? WHERE user_id = ?",
+            (datetime.now(timezone.utc).isoformat(), user_id)
+        )
+        conn.commit()
+    return True
+
+
 # ── Daily Quota ────────────────────────────────────────────────────────────────
 
 def get_today_count(user_id: int) -> int:
@@ -117,9 +167,13 @@ def get_today_count(user_id: int) -> int:
 def can_edit(user_id: int, daily_limit: int) -> bool:
     """
     Returns True if the user is allowed to start a new render.
-    Premium users always return True. Free users check daily quota.
+    Premium users always return True.
+    If the user has custom credits > 0, returns True.
+    Otherwise, checks daily free limit.
     """
     if is_premium(user_id):
+        return True
+    if get_credits(user_id) > 0:
         return True
     return get_today_count(user_id) < daily_limit
 
@@ -127,8 +181,13 @@ def can_edit(user_id: int, daily_limit: int) -> bool:
 def record_edit(user_id: int):
     """
     Increment today's edit count by 1.
-    Uses INSERT OR REPLACE to create the row if it doesn't exist yet.
+    If user has custom credits > 0, decrement that instead.
     """
+    if is_premium(user_id):
+        return
+    if get_credits(user_id) > 0:
+        use_credit(user_id)
+        return
     today = _get_today()
     with _connect() as conn:
         conn.execute("""
@@ -141,11 +200,16 @@ def record_edit(user_id: int):
 
 def get_remaining_edits(user_id: int, daily_limit: int) -> int:
     """
-    Return how many more free edits the user has today.
+    Return how many more edits the user has.
     Returns -1 for premium users (unlimited).
+    Returns custom credits if user has custom credits.
+    Otherwise returns remaining free daily edits.
     """
     if is_premium(user_id):
         return -1  # -1 = unlimited
+    credits = get_credits(user_id)
+    if credits > 0:
+        return credits
     used = get_today_count(user_id)
     return max(0, daily_limit - used)
 

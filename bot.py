@@ -25,13 +25,16 @@ PLUGINS = [
 
 async def set_bot_commands(app: Client):
     """Register the bot's command menu in Telegram (shown in the / menu)."""
-    await app.set_bot_commands([
-        BotCommand("start",   "🎬 Welcome message & your status"),
-        BotCommand("edit",    "🎥 Open quality menu and start editing"),
-        BotCommand("help",    "📖 Show full usage guide"),
-        BotCommand("premium", "💎 View premium plans"),
-    ])
-    print("[Bot] ✅ Bot commands registered.")
+    try:
+        await asyncio.wait_for(app.set_bot_commands([
+            BotCommand("start",   "🎬 Welcome message & your status"),
+            BotCommand("edit",    "🎥 Open quality menu and start editing"),
+            BotCommand("help",    "📖 Show full usage guide"),
+            BotCommand("premium", "💎 View premium plans"),
+        ]), timeout=10)
+        print("[Bot] ✅ Bot commands registered.")
+    except Exception as e:
+        print(f"[Bot] ⚠️ Could not register bot commands: {e}")
 
 
 async def main():
@@ -47,6 +50,7 @@ async def main():
     init_db(Config.DB_PATH)
 
     # ── Start Pyrogram client ──────────────────────────────────────────────────
+    print("[Bot] 🚀 Initializing Pyrogram client...")
     app = Client(
         name="gameover_edits",
         api_id=Config.API_ID,
@@ -55,6 +59,7 @@ async def main():
     )
 
     # ── Load all plugins ───────────────────────────────────────────────────────
+    print("[Bot] 📦 Loading plugins...")
     for plugin_path in PLUGINS:
         module = importlib.import_module(plugin_path)
         if hasattr(module, "register"):
@@ -64,13 +69,8 @@ async def main():
             print(f"[Bot] ⚠️  Plugin has no register() function: {plugin_path}")
 
     # ── Start everything ───────────────────────────────────────────────────────
+    print("[Bot] 🌐 Connecting to Telegram...")
     async with app:
-        # Register bot commands in Telegram menu
-        await set_bot_commands(app)
-
-        # Start render queue worker
-        await render_queue.start()
-
         me = await app.get_me()
         print(f"\n{'='*50}")
         print(f"🎬 GAMEOVER EDITS BOT STARTED!")
@@ -78,6 +78,12 @@ async def main():
         print(f"   Bot ID   : {me.id}")
         print(f"   Owner ID : {Config.OWNER_ID}")
         print(f"{'='*50}\n")
+
+        # Start render queue worker
+        await render_queue.start()
+
+        # Register bot commands asynchronously
+        asyncio.create_task(set_bot_commands(app))
 
         # Keep running
         await asyncio.Event().wait()

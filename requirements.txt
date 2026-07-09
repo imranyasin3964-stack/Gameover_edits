@@ -9,7 +9,10 @@ TgCrypto==1.2.5
 python-dotenv==1.0.1
 
 # Async HTTP (for future features)
-aiohttp==3.9.5
+aiohttp>=3.9.5
 
 # For tracking async tasks cleanly
 asyncio-throttle==1.0.2
+
+# System resource stats
+psutil==5.9.8
