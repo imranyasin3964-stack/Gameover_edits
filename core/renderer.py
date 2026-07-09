@@ -83,16 +83,21 @@ QUALITY_PROFILES: dict[str, dict] = {
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _parse_time_to_secs(time_str: str) -> Optional[float]:
-    """Parse 'HH:MM:SS.xx' or 'HH:MM:SS' from FFmpeg stderr into total seconds."""
+    """Parse 'HH:MM:SS.xx', 'HH:MM:SS', or 'time=XX.XX' raw seconds from FFmpeg stderr into total seconds."""
     m = re.search(r"time=(\d+):(\d+):(\d+)(?:\.(\d+))?", time_str)
     if m:
         h, mi, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        cs = 0.0
         if m.group(4):
             val_str = m.group(4)
             cs = int(val_str) / (10 ** len(val_str))
-        else:
-            cs = 0.0
         return h * 3600 + mi * 60 + s + cs
+    
+    # Fallback to parse time=XX.XX raw seconds format
+    m2 = re.search(r"time=\s*(\d+(?:\.\d+)?)", time_str)
+    if m2:
+        return float(m2.group(1))
+        
     return None
 
 
@@ -454,69 +459,128 @@ async def render_video(
     last_cb_time = 0.0
 
     try:
-        # stdout=DEVNULL: prevents OS stdout buffer from filling → deadlock
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        # Run FFmpeg process with stderr=PIPE. Use create_subprocess_shell for shell compatibility
+        import shlex
+        cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
+        
+        # Optimize execution for Windows vs Linux VPS
+        if sys.platform.startswith("win"):
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        else:
+            proc = await asyncio.create_subprocess_shell(
+                cmd_str,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
 
         # ── Parse FFmpeg stderr for real-time progress ─────────────────────────
         async def _read_stderr():
-            nonlocal last_cb_time
-            async for raw_line in proc.stderr:
-                line = raw_line.decode("utf-8", errors="ignore").strip()
+            nonlocal last_cb_time, total_duration
+            buffer = ""
+            while True:
+                # Read stderr in chunks of 128 bytes to catch carriage returns (\r) in real time
+                chunk = await proc.stderr.read(128)
+                if not chunk:
+                    break
+                
+                buffer += chunk.decode("utf-8", errors="ignore")
+                
+                # Process lines separated by \r or \n
+                while True:
+                    idx_r = buffer.find("\r")
+                    idx_n = buffer.find("\n")
+                    
+                    if idx_r == -1 and idx_n == -1:
+                        break
+                    
+                    # Splitting on the delimiter that appears first
+                    if idx_r != -1 and (idx_n == -1 or idx_r < idx_n):
+                        line = buffer[:idx_r]
+                        buffer = buffer[idx_r + 1:]
+                    else:
+                        line = buffer[:idx_n]
+                        buffer = buffer[idx_n + 1:]
+                    
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Parse Duration from stderr stream dynamically if probe returned 0
+                    if total_duration == 0.0:
+                        dur_match = re.search(r"Duration:\s*(\d+):(\d+):(\d+)(?:\.(\d+))?", line)
+                        if dur_match:
+                            h, mi, s = int(dur_match.group(1)), int(dur_match.group(2)), int(dur_match.group(3))
+                            cs = 0.0
+                            if dur_match.group(4):
+                                val_str = dur_match.group(4)
+                                cs = int(val_str) / (10 ** len(val_str))
+                            total_duration = h * 3600 + mi * 60 + s + cs
+                            print(f"[Renderer] Parsed duration from stream: {total_duration:.2f}s")
+                    
+                    rendered_secs = _parse_time_to_secs(line)
+                    if rendered_secs is None:
+                        continue
 
-                rendered_secs = _parse_time_to_secs(line)
-                if rendered_secs is None:
-                    continue
+                    now     = time.time()
+                    elapsed = now - start_time
 
-                now     = time.time()
-                elapsed = now - start_time
+                    if total_duration > 0:
+                        pct = min(99.0, (rendered_secs / total_duration) * 100)
+                    else:
+                        pct = 0.0
 
-                if total_duration > 0:
-                    pct = min(99.0, (rendered_secs / total_duration) * 100)
-                else:
-                    pct = 0.0
+                    # Parse speed
+                    speed_match = re.search(r"speed=\s*([\d\.]+)x", line)
+                    speed_str = speed_match.group(1) + "x" if speed_match else "1.0x"
 
-                if elapsed > 1 and pct > 0:
-                    total_est = elapsed / (pct / 100)
-                    eta_secs  = max(0, total_est - elapsed)
-                    eta_str   = _format_duration(eta_secs)
-                else:
-                    eta_str = "calculating..."
+                    # Parse float speed value for accurate dynamic ETA
+                    speed_val = 1.0
+                    if speed_match:
+                        try:
+                            speed_val = float(speed_match.group(1))
+                        except ValueError:
+                            pass
 
-                bar = _make_progress_bar(pct)
+                    # Calculate ETA dynamically: remaining_video_duration / speed
+                    if total_duration > 0 and speed_val > 0:
+                        remaining_video = total_duration - rendered_secs
+                        eta_secs  = max(0.0, remaining_video / speed_val)
+                        eta_str   = _format_duration(eta_secs)
+                    else:
+                        eta_str = "calculating..."
 
-                # Parse speed
-                speed_match = re.search(r"speed=\s*([\d\.]+)x", line)
-                speed_str = speed_match.group(1) + "x" if speed_match else "1.0x"
+                    bar = _make_progress_bar(pct)
 
-                # Live output file size
-                out_size_mb = 0.0
-                if os.path.exists(output_path):
-                    out_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                    # Live output file size
+                    out_size_mb = 0.0
+                    if os.path.exists(output_path):
+                        out_size_mb = os.path.getsize(output_path) / (1024 * 1024)
 
-                print(
-                    f"[Renderer {job_id}] {bar} | "
-                    f"size: {out_size_mb:.1f}MB | "
-                    f"elapsed: {_format_duration(elapsed)} | "
-                    f"ETA: {eta_str} | "
-                    f"speed: {speed_str}"
-                )
+                    print(
+                        f"[Renderer {job_id}] {bar} | "
+                        f"size: {out_size_mb:.1f}MB | "
+                        f"elapsed: {_format_duration(elapsed)} | "
+                        f"ETA: {eta_str} | "
+                        f"speed: {speed_str}"
+                    )
 
-                if progress_callback and (now - last_cb_time) >= 3.0:
-                    last_cb_time = now
-                    await progress_callback({
-                        "step":    "⚙️ Rendering...",
-                        "pct":     pct,
-                        "bar":     bar,
-                        "elapsed": _format_duration(elapsed),
-                        "eta":     eta_str,
-                        "speed":   speed_str,
-                        "quality": profile["label"],
-                        "size_mb": out_size_mb,
-                    })
+                    # Anti-flood logic: update Telegram message every 4 seconds
+                    if progress_callback and (now - last_cb_time) >= 4.0:
+                        last_cb_time = now
+                        await progress_callback({
+                            "step":    "⚙️ Rendering...",
+                            "pct":     pct,
+                            "bar":     bar,
+                            "elapsed": _format_duration(elapsed),
+                            "eta":     eta_str,
+                            "speed":   speed_str,
+                            "quality": profile["label"],
+                            "size_mb": out_size_mb,
+                        })
 
         await _read_stderr()
         await proc.wait()
