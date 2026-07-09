@@ -1,12 +1,22 @@
 """
-⚡ GAMEOVER EDITS — Flawless High-Performance FFmpeg Render Engine
-Features:
-  - zscale (bicubic) for fast, color-accurate, high-end scaling
-  - mpdecimate + yadif=mode=1 + fps for pure buttery 60/120fps motion
-  - Optimized presets (veryfast) + smart CRF to speed up VPS renders by 3-5x
-  - Deadlock-free asyncio subprocess execution (stdout=DEVNULL)
-  - Live output file size reporting
-  - Premium status progress bars (▰▰▰▰▰▰▰▱▱▱)
+⚡ GAMEOVER EDITS — Master FFmpeg Render Engine v2.0
+=====================================================
+Three truly distinct render tiers, each with its own filter chain:
+
+  /edit60  → 1080p 60fps  | preset=fast     | CRF 18 | ~5 min
+             Standard bicubic scale, basic color grade. Fast & free.
+
+  /edit90  → 2K 60fps     | preset=medium   | CRF 16 | ~10 min
+             Stronger Lanczos scale, deeper S-curves, medium unsharp.
+
+  /edit120 → 4K 60fps     | preset=veryslow | CRF 14 | ~25-30 min
+             hqdn3d denoiser → spline36 upscale → extreme S-curve
+             color grading → heavy unsharp. Near-lossless. Max CPU.
+
+Rules:
+  - NO minterpolate (causes access violations / crashes).
+  - stdout=DEVNULL to prevent asyncio subprocess deadlock.
+  - Live output file size + ETA + premium progress bars.
 """
 
 import os
@@ -27,34 +37,45 @@ os.makedirs(INPUT_DIR, exist_ok=True)
 
 
 # ── Quality Profiles ───────────────────────────────────────────────────────────
+# These are the source-of-truth configs.  The filter chain for each profile
+# is built separately in _build_filter_chain_* below.
 
 QUALITY_PROFILES: dict[str, dict] = {
-    "1080p60": {
-        "label":   "🎬 1080p — 60 FPS",
-        "width":   1920,
-        "height":  1080,
-        "fps":     60,
-        "crf":     18,
-        "preset":  "veryfast",
-        "est_min": "1-2 min",
+
+    # ── Tier 1: FAST MODE ──────────────────────────────────────────────────────
+    "edit60": {
+        "label":    "🎬 1080p — 60 FPS (Fast Mode)",
+        "width":    1920,
+        "height":   1080,
+        "fps":      60,
+        "crf":      18,
+        "preset":   "fast",
+        "est_min":  "~5 min",
+        "tier":     1,
     },
-    "2k60": {
-        "label":   "🎥 2K — 60 FPS",
-        "width":   2560,
-        "height":  1440,
-        "fps":     60,
-        "crf":     16,
-        "preset":  "veryfast",
-        "est_min": "2-3 min",
+
+    # ── Tier 2: BALANCE MODE ───────────────────────────────────────────────────
+    "edit90": {
+        "label":    "🎥 2K — 60 FPS (Balance Mode)",
+        "width":    2560,
+        "height":   1440,
+        "fps":      60,
+        "crf":      16,
+        "preset":   "medium",
+        "est_min":  "~10 min",
+        "tier":     2,
     },
-    "4k120": {
-        "label":   "💎 4K — 120 FPS (Beast Mode)",
-        "width":   3840,
-        "height":  2160,
-        "fps":     120,
-        "crf":     16,
-        "preset":  "veryfast",
-        "est_min": "3-5 min",
+
+    # ── Tier 3: TRUE BEAST MODE ────────────────────────────────────────────────
+    "edit120": {
+        "label":    "💎 4K — 60 FPS (TRUE Beast Mode 🔒)",
+        "width":    3840,
+        "height":   2160,
+        "fps":      60,
+        "crf":      14,
+        "preset":   "veryslow",
+        "est_min":  "25-30 min",
+        "tier":     3,
     },
 }
 
@@ -86,7 +107,7 @@ def _format_duration(secs: float) -> str:
 
 
 def _make_progress_bar(pct: float, length: int = 12) -> str:
-    """Build a premium progress bar like ▰▰▰▰▰▰▰▱▱▱ 70%"""
+    """Build a premium progress bar: ▰▰▰▰▰▰▰▱▱▱ 70%"""
     filled = int(round(pct / 100 * length))
     empty  = length - filled
     return f"{'▰' * filled}{'▱' * empty} {pct:.0f}%"
@@ -116,21 +137,15 @@ async def _get_video_duration(input_path: str) -> float:
 
 def _get_font_file() -> str:
     """Return a valid font path depending on the operating system."""
-    # We import Config here to prevent circular import issues
     from config import Config
-    
-    # Check if a settings-configured start video or start font exists
     if Config.WATERMARK_FONT and os.path.exists(Config.WATERMARK_FONT):
         return Config.WATERMARK_FONT
 
     if sys.platform.startswith("win"):
-        # Windows standard font path
         font_path = "C:/Windows/Fonts/arial.ttf"
         if os.path.exists(font_path):
-            # Escape the colon for FFmpeg filter parameter: C\:/Windows/...
             return font_path.replace(":", "\\:")
     else:
-        # Linux standard font paths
         for path in [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -142,65 +157,198 @@ def _get_font_file() -> str:
     return ""
 
 
-# ── Filter Chain Builder ───────────────────────────────────────────────────────
+# ── Per-Tier Filter Chain Builders ─────────────────────────────────────────────
 
-def _build_filter_chain(profile: dict, watermark_text: str) -> str:
+def _escape_wm(text: str) -> str:
+    """Escape watermark text for FFmpeg drawtext."""
+    return (text
+            .replace("\\", "\\\\")
+            .replace("'",  "\\'")
+            .replace(":",  "\\:"))
+
+
+def _drawtext(wm: str, font_opt: str) -> str:
+    return (
+        f"drawtext=text='{wm}':fontsize=32:fontcolor=white@0.5{font_opt}"
+        f":x=w-tw-24:y=h-th-24:shadowx=2:shadowy=2:shadowcolor=black@0.6"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 1 — 1080p FAST MODE
+# Goal: ~5 minutes. Standard bicubic upscale, basic color grade.
+# ─────────────────────────────────────────────────────────────────────────────
+def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
     """
-    Build the complete FFmpeg video filter chain for a given quality profile.
-    Uses:
-      - mpdecimate to drop duplicate frames
-      - yadif=mode=1 to deinterlace cleanly if interlaced (bobs fields, double frame rate)
-      - zscale with bicubic filter for fast, colorspace-aware scaling
-      - fps to double frame rate cleanly to target (60 or 120)
-      - S-curve color grading and unsharp mask
-      - watermark drawtext
-      - yuv420p format
+    Fast chain for 1080p:
+      mpdecimate → yadif=1 → zscale bicubic → fps=60
+      → curves medium → eq(sat/bright/contrast) → unsharp(light)
+      → drawtext → format=yuv420p
     """
-    w   = profile["width"]
-    h   = profile["height"]
-    fps = profile["fps"]
-
-    # Escape watermark text for FFmpeg drawtext filter
-    wm = (watermark_text
-          .replace("\\", "\\\\")
-          .replace("'",  "\\'")
-          .replace(":",  "\\:"))
-
-    font_file = _get_font_file()
-    font_opt = f":fontfile='{font_file}'" if font_file else ""
+    w, h, fps = profile["width"], profile["height"], profile["fps"]
+    wm = _escape_wm(watermark_text)
+    font_opt = f":fontfile='{_get_font_file()}'" if _get_font_file() else ""
 
     filters = [
-        # Drop duplicates
+        # Dedup frames before upscale
         "mpdecimate",
-        
-        # Fast clean deinterlacing if interlaced, double frame rate bob
+        # Clean deinterlace
         "yadif=mode=1",
-
-        # Colorspace-aware zscale (bicubic is 2x faster than lanczos, looks super premium)
-        f"zscale=w={w}:h={h}:filter=bicubic",
-
-        # Target Frame Rate
+        # Bicubic scale — fast, sharp, great quality for 1080p
+        f"zscale=w={w}:h={h}:filter=bicubic:dither=random",
+        # Lock to 60fps
         f"fps={fps}",
-
-        # S-curve contrast: HDR-like punch without blowing highlights
+        # Standard S-curve: medium contrast punch
         "curves=preset=medium_contrast",
-
-        # Saturation + brightness boost for vivid, vibrant colors
-        "eq=saturation=1.3:brightness=0.025:contrast=1.05:gamma=1.04",
-
-        # Unsharp mask: restores crispness lost during upscale
-        "unsharp=lx=3:ly=3:la=0.5:cx=3:cy=3:ca=0.2",
-
-        # Watermark — white, 45% opacity, 20px from bottom-right corner
-        f"drawtext=text='{wm}':fontsize=28:fontcolor=white@0.45{font_opt}"
-        f":x=w-tw-20:y=h-th-20:shadowx=1:shadowy=1:shadowcolor=black@0.5",
-
-        # Force yuv420p
+        # Saturation + slight brightness lift
+        "eq=saturation=1.25:brightness=0.02:contrast=1.04:gamma=1.03",
+        # Light unsharp — restore detail lost in upscale
+        "unsharp=lx=3:ly=3:la=0.4:cx=3:cy=3:ca=0.15",
+        # Watermark
+        _drawtext(wm, font_opt),
+        # Output colorspace
         "format=yuv420p",
     ]
-
     return ",".join(filters)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 2 — 2K BALANCE MODE
+# Goal: ~10 minutes. Lanczos scale, deeper curves, medium unsharp.
+# ─────────────────────────────────────────────────────────────────────────────
+def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
+    """
+    Balance chain for 2K:
+      mpdecimate → yadif=1 → zscale lanczos → fps=60
+      → curves(stronger S) → eq(deeper sat) → unsharp(medium)
+      → drawtext → format=yuv420p
+    """
+    w, h, fps = profile["width"], profile["height"], profile["fps"]
+    wm = _escape_wm(watermark_text)
+    font_opt = f":fontfile='{_get_font_file()}'" if _get_font_file() else ""
+
+    filters = [
+        "mpdecimate",
+        "yadif=mode=1",
+        # Lanczos — higher quality, slower than bicubic
+        f"zscale=w={w}:h={h}:filter=lanczos:dither=random",
+        f"fps={fps}",
+        # Deeper S-curve for cinematic feel — raises shadows, controls highlights
+        "curves=r='0/0 0.05/0.02 0.5/0.55 0.95/0.98 1/1'"
+        ":g='0/0 0.05/0.02 0.5/0.53 0.95/0.97 1/1'"
+        ":b='0/0 0.05/0.03 0.5/0.51 0.95/0.96 1/1'",
+        # Stronger saturation — makes colours pop on OLED / high-contrast screens
+        "eq=saturation=1.35:brightness=0.025:contrast=1.06:gamma=1.04",
+        # Medium unsharp — sharpens edges and fine textures at 2K resolution
+        "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.25",
+        _drawtext(wm, font_opt),
+        "format=yuv420p",
+    ]
+    return ",".join(filters)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 3 — 4K TRUE BEAST MODE
+# Goal: 25-30 minutes. Max CPU. Near-lossless. Cinematic.
+#
+# Chain (order matters):
+#   1. mpdecimate          — drop duplicate / near-duplicate frames
+#   2. yadif=mode=1        — clean deinterlace (bob, preserves motion)
+#   3. hqdn3d              — high-quality 3D denoise BEFORE upscale
+#                            (removes source noise so spline36 upscales
+#                             clean pixels, not noise)
+#   4. zscale spline36     — the BEST scaler FFmpeg has; slower than
+#                            lanczos but mathematically superior for 4K
+#   5. fps=60              — lock output frame rate
+#   6. Custom RGB curves   — cinema-grade S-curve:
+#                            deep shadows (lifted black floor),
+#                            rich mids, rolled-off highlights
+#   7. eq                  — saturation / contrast / gamma fine-tune
+#   8. unsharp (heavy)     — extreme edge + chroma sharpening for
+#                            razor-sharp 4K pixel detail
+#   9. drawtext watermark
+#  10. format=yuv420p
+# ─────────────────────────────────────────────────────────────────────────────
+def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
+    """
+    True Beast Mode chain for 4K / veryslow / CRF 14.
+    Every filter is tuned to squeeze the maximum cinematic quality
+    out of a raw mobile / camera video clip.
+    """
+    w, h, fps = profile["width"], profile["height"], profile["fps"]
+    wm = _escape_wm(watermark_text)
+    font_opt = f":fontfile='{_get_font_file()}'" if _get_font_file() else ""
+
+    # ── hqdn3d parameters ─────────────────────────────────────────────────────
+    # luma_spatial=4, luma_tmp=3, chroma_spatial=3, chroma_tmp=2.5
+    # Aggressive enough to kill sensor noise without smearing real edges.
+    hqdn3d = "hqdn3d=luma_spatial=4:luma_tmp=3:chroma_spatial=3:chroma_tmp=2.5"
+
+    # ── spline36 upscale ─────────────────────────────────────────────────────
+    # spline36 is the gold standard for quality upscaling: no ringing,
+    # no aliasing, maximum sharpness retention.
+    zscale = (
+        f"zscale=w={w}:h={h}"
+        ":filter=spline36"
+        ":dither=random"
+        ":primaries=709"
+        ":transfer=709"
+        ":matrix=709"
+    )
+
+    # ── Cinema S-curve (per-channel RGB) ─────────────────────────────────────
+    # Lifted black floor (0.02 at input-0 and 0.04 at input-0.05) gives the
+    # classic cinematic "fade to grey" shadow look used in Hollywood grades.
+    # Rolled highlights (0.97 at input-0.95) prevent blown-out whites.
+    # Green channel is slightly more aggressive mid-boost for warmth.
+    curves = (
+        "curves="
+        "r='0/0.02 0.05/0.06 0.30/0.32 0.50/0.56 0.75/0.78 0.95/0.96 1/0.98'"
+        ":g='0/0.02 0.05/0.07 0.30/0.33 0.50/0.58 0.75/0.79 0.95/0.97 1/0.99'"
+        ":b='0/0.02 0.05/0.05 0.30/0.30 0.50/0.52 0.75/0.76 0.95/0.95 1/0.97'"
+    )
+
+    # ── eq fine-tune ─────────────────────────────────────────────────────────
+    # After curves, we dial in saturation for vivid colours without
+    # over-saturation. contrast=1.08 adds the final punch.
+    eq = "eq=saturation=1.45:brightness=0.03:contrast=1.08:gamma=1.05"
+
+    # ── Heavy unsharp mask ────────────────────────────────────────────────────
+    # At 4K, edges are naturally larger in pixels. A stronger luma kernel
+    # (lx=7:ly=7) sharpens full pixel-level detail across hair, text,
+    # skin texture.  Chroma sharpening (cx=5:cy=5) ensures colours don't
+    # bleed across edges.
+    unsharp = "unsharp=lx=7:ly=7:la=0.8:cx=5:cy=5:ca=0.35"
+
+    filters = [
+        "mpdecimate",
+        "yadif=mode=1",
+        hqdn3d,       # Step 3: Denoise BEFORE upscale (critical order)
+        zscale,       # Step 4: spline36 upscale to 4K
+        f"fps={fps}", # Step 5: Lock to 60fps
+        curves,       # Step 6: Cinema S-curve grade
+        eq,           # Step 7: Saturation / contrast fine-tune
+        unsharp,      # Step 8: Extreme edge sharpening
+        _drawtext(wm, font_opt),
+        "format=yuv420p",
+    ]
+    return ",".join(filters)
+
+
+# ── Dispatch filter chain by tier ──────────────────────────────────────────────
+
+def _build_filter_chain(profile: dict, watermark_text: str) -> str:
+    """Route to the correct tier-specific filter chain builder."""
+    tier = profile.get("tier", 1)
+    if tier == 1:
+        return _build_chain_tier1(profile, watermark_text)
+    elif tier == 2:
+        return _build_chain_tier2(profile, watermark_text)
+    else:
+        return _build_chain_tier3(profile, watermark_text)
+
+
+# ── FFmpeg Command Builder ──────────────────────────────────────────────────────
 
 def _build_ffmpeg_cmd(
     input_path: str,
@@ -209,30 +357,60 @@ def _build_ffmpeg_cmd(
     filter_chain: str
 ) -> list[str]:
     """Assemble the final FFmpeg command list."""
-    return [
+    cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
 
-        # ── Video ──
+        # ── Video ──────────────────────────────────────────────────────────────
         "-vf", filter_chain,
-        "-c:v",    "libx264",
-        "-preset",  profile["preset"],
-        "-crf",     str(profile["crf"]),
+        "-c:v",   "libx264",
+        "-preset", profile["preset"],
+        "-crf",    str(profile["crf"]),
 
-        # ── Colorspace metadata (fixes display on Apple/Samsung/web players) ──
+        # Force all CPU threads (no limit) — critical for veryslow to be fast
+        "-threads", "0",
+    ]
+
+    # Tier 3 gets extra x264 tuning params for maximum quality
+    if profile.get("tier") == 3:
+        cmd += [
+            # Tune for film-like content: slower but better motion compensation
+            "-tune", "film",
+            # Max analysis depth — reference frames, subpixel motion
+            "-x264-params",
+            (
+                "ref=6"
+                ":bframes=8"
+                ":b-adapt=2"
+                ":direct=auto"
+                ":me=umh"
+                ":subme=10"
+                ":merange=24"
+                ":trellis=2"
+                ":rc-lookahead=60"
+                ":deblock=-1,-1"
+                ":psy-rd=1.0:0.15"
+                ":aq-mode=3"
+                ":aq-strength=0.8"
+            ),
+        ]
+
+    cmd += [
+        # ── Colorspace metadata ─────────────────────────────────────────────
         "-colorspace",      "bt709",
         "-color_primaries", "bt709",
         "-color_trc",       "bt709",
 
-        # ── Audio: re-encode to AAC 192k for universal compatibility ──
-        "-c:a",  "aac",
-        "-b:a",  "192k",
+        # ── Audio: AAC 192k ─────────────────────────────────────────────────
+        "-c:a", "aac",
+        "-b:a", "192k",
 
-        # ── Output container optimizations ──
-        "-movflags", "+faststart",  # Fast web playback (moov atom at start)
+        # ── Fast web playback ───────────────────────────────────────────────
+        "-movflags", "+faststart",
 
         output_path,
     ]
+    return cmd
 
 
 # ── Main Renderer ──────────────────────────────────────────────────────────────
@@ -245,6 +423,15 @@ async def render_video(
 ) -> Optional[str]:
     """
     Render a video using the GAMEOVER EDITS FFmpeg engine.
+
+    Args:
+        input_path:        Path to the raw input video.
+        quality_key:       One of 'edit60', 'edit90', 'edit120'.
+        watermark_text:    Text to burn into the bottom-right corner.
+        progress_callback: Async callable that receives a progress dict.
+
+    Returns:
+        Path to the rendered output file, or None on failure.
     """
     profile = QUALITY_PROFILES.get(quality_key)
     if not profile:
@@ -260,22 +447,21 @@ async def render_video(
     print(f"[Renderer] 🚀 Starting job {job_id} | Quality: {profile['label']}")
     print(f"[Renderer] CMD: {' '.join(cmd)}")
 
-    # Get input duration for accurate progress calculation
     total_duration = await _get_video_duration(input_path)
     print(f"[Renderer] Input duration: {total_duration:.2f}s")
 
-    start_time = time.time()
+    start_time   = time.time()
     last_cb_time = 0.0
 
     try:
-        # Crucial Fix: stdout=DEVNULL avoids deadlock buffers
+        # stdout=DEVNULL: prevents OS stdout buffer from filling → deadlock
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
 
-        # ── Parse FFmpeg stderr for progress ──────────────────────────────────
+        # ── Parse FFmpeg stderr for real-time progress ─────────────────────────
         async def _read_stderr():
             nonlocal last_cb_time
             async for raw_line in proc.stderr:
@@ -288,31 +474,32 @@ async def render_video(
                 now     = time.time()
                 elapsed = now - start_time
 
-                # Calculate progress percentage
                 if total_duration > 0:
                     pct = min(99.0, (rendered_secs / total_duration) * 100)
                 else:
                     pct = 0.0
 
-                # Estimate ETA
                 if elapsed > 1 and pct > 0:
-                    total_est   = elapsed / (pct / 100)
-                    eta_secs    = max(0, total_est - elapsed)
-                    eta_str     = _format_duration(eta_secs)
+                    total_est = elapsed / (pct / 100)
+                    eta_secs  = max(0, total_est - elapsed)
+                    eta_str   = _format_duration(eta_secs)
                 else:
                     eta_str = "calculating..."
 
                 bar = _make_progress_bar(pct)
 
-                # Get current output file size (live update)
+                # Live output file size
                 out_size_mb = 0.0
                 if os.path.exists(output_path):
                     out_size_mb = os.path.getsize(output_path) / (1024 * 1024)
 
-                # Console log progress
-                print(f"[Renderer {job_id}] {bar} | size: {out_size_mb:.1f}MB | elapsed: {_format_duration(elapsed)} | ETA: {eta_str}")
+                print(
+                    f"[Renderer {job_id}] {bar} | "
+                    f"size: {out_size_mb:.1f}MB | "
+                    f"elapsed: {_format_duration(elapsed)} | "
+                    f"ETA: {eta_str}"
+                )
 
-                # Fire callback every 3 seconds (don't spam Telegram API)
                 if progress_callback and (now - last_cb_time) >= 3.0:
                     last_cb_time = now
                     await progress_callback({
@@ -340,7 +527,6 @@ async def render_video(
         size_mb       = os.path.getsize(output_path) / (1024 * 1024)
         print(f"[Renderer] ✅ Job {job_id} done in {_format_duration(elapsed_total)} | Size: {size_mb:.1f} MB")
 
-        # Fire final 100% callback
         if progress_callback:
             await progress_callback({
                 "step":    "📤 Uploading...",

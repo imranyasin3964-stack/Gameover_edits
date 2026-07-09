@@ -31,16 +31,16 @@ from core.renderer import render_video, QUALITY_PROFILES, INPUT_DIR
 def _quality_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(
-            "🎬 1080p — 60 FPS  (Fast & Free)",
-            callback_data="ge_quality|1080p60"
+            "🎬 /edit60 — 1080p 60fps  (Fast & Free)",
+            callback_data="ge_quality|edit60"
         )],
         [InlineKeyboardButton(
-            "🎥 2K — 60 FPS  (High Quality)",
-            callback_data="ge_quality|2k60"
+            "🎥 /edit90 — 2K 60fps  (Balance Mode)",
+            callback_data="ge_quality|edit90"
         )],
         [InlineKeyboardButton(
-            "💎 4K — 120 FPS  (Beast Mode 🔒)",
-            callback_data="ge_quality|4k120"
+            "💎 /edit120 — 4K Beast Mode  (VIP 🔒)",
+            callback_data="ge_quality|edit120"
         )],
         [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel")],
     ])
@@ -72,9 +72,9 @@ def register(app: Client):
             f"<b>🎬 GAMEOVER EDITS — Select Quality</b>\n\n"
             f"{quota_line}\n\n"
             f"Choose the render quality for your video:\n\n"
-            f"🎬 <b>1080p 60fps</b> — Full HD, ~1-2 min render\n"
-            f"🎥 <b>2K 60fps</b>    — Ultra sharp, ~2-4 min render\n"
-            f"💎 <b>4K 120fps</b>   — Beast Mode, ~5-12 min render\n\n"
+            f"🎬 <b>/edit60</b>  — 1080p 60fps, ~5 min, Fast &amp; Free\n"
+            f"🎥 <b>/edit90</b>  — 2K 60fps, ~10 min, Balance Mode\n"
+            f"💎 <b>/edit120</b> — 4K Beast Mode, 25-30 min, VIP Only\n\n"
             f"<i>After selecting, send the video you want to edit.</i>",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=_quality_keyboard(),
@@ -93,10 +93,11 @@ def register(app: Client):
             return
 
         # 4K Beast Mode: premium check
-        if quality == "4k120" and not is_premium(user.id):
+        if quality == "edit120" and not is_premium(user.id):
             await query.answer(
-                "🔒 4K 120 FPS is a VIP Premium feature!\n"
-                "Contact the admin to unlock Beast Mode and get unlimited edits.",
+                "🔒 4K Beast Mode is a VIP Premium feature!\n"
+                "It uses veryslow + spline36 + cinema colour grading (25-30 min).\n"
+                "Contact the admin to unlock!",
                 show_alert=True
             )
             return
