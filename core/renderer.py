@@ -56,10 +56,10 @@ QUALITY_PROFILES: dict[str, dict] = {
 
     # ── Tier 2: BALANCE MODE ───────────────────────────────────────────────────
     "edit90": {
-        "label":    "🎥 2K — 60 FPS (Balance Mode)",
+        "label":    "🎥 2K — 90 FPS (Pro Mode)",
         "width":    2560,
         "height":   1440,
-        "fps":      60,
+        "fps":      90,
         "crf":      16,
         "preset":   "medium",
         "est_min":  "~10 min",
@@ -68,10 +68,10 @@ QUALITY_PROFILES: dict[str, dict] = {
 
     # ── Tier 3: TRUE BEAST MODE ────────────────────────────────────────────────
     "edit120": {
-        "label":    "💎 4K — 60 FPS (TRUE Beast Mode 🔒)",
+        "label":    "💎 4K — 120 FPS (TRUE Beast Mode 🔒)",
         "width":    3840,
         "height":   2160,
-        "fps":      60,
+        "fps":      120,
         "crf":      14,
         "preset":   "veryslow",
         "est_min":  "25-30 min",
@@ -187,7 +187,7 @@ def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
     """
     Fast chain for 1080p:
       mpdecimate → yadif=1 → zscale bicubic → fps=60
-      → curves medium → eq(sat/bright/contrast) → unsharp(light)
+      → curves strong → eq(deep contrast/sat) → unsharp(light)
       → drawtext → format=yuv420p
     """
     w, h, fps = profile["width"], profile["height"], profile["fps"]
@@ -195,37 +195,28 @@ def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
     font_opt = f":fontfile='{_get_font_file()}'" if _get_font_file() else ""
 
     filters = [
-        # Dedup frames before upscale
         "mpdecimate",
-        # Clean deinterlace
         "yadif=mode=1",
-        # Bicubic scale — fast, sharp, great quality for 1080p
         f"zscale=w={w}:h={h}:filter=bicubic:dither=random",
-        # Lock to 60fps
         f"fps={fps}",
-        # Standard S-curve: medium contrast punch
-        "curves=preset=medium_contrast",
-        # Saturation + slight brightness lift
-        "eq=saturation=1.25:brightness=0.02:contrast=1.04:gamma=1.03",
-        # Light unsharp — restore detail lost in upscale
+        "curves=preset=strong_contrast",
+        "eq=contrast=1.12:saturation=1.35:gamma=0.96",
         "unsharp=lx=3:ly=3:la=0.4:cx=3:cy=3:ca=0.15",
-        # Watermark
         _drawtext(wm, font_opt),
-        # Output colorspace
         "format=yuv420p",
     ]
     return ",".join(filters)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TIER 2 — 2K BALANCE MODE
-# Goal: ~10 minutes. Lanczos scale, deeper curves, medium unsharp.
+# TIER 2 — 2K PRO MODE
+# Goal: ~10 minutes. Lanczos scale, deeper curves, optical flow motion interpolation.
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
     """
     Balance chain for 2K:
-      mpdecimate → yadif=1 → zscale lanczos → fps=60
-      → curves(stronger S) → eq(deeper sat) → unsharp(medium)
+      mpdecimate → yadif=1 → zscale lanczos → framerate=fps=90
+      → curves(deep blacks) → eq(cinematic sat/gamma) → unsharp(medium)
       → drawtext → format=yuv420p
     """
     w, h, fps = profile["width"], profile["height"], profile["fps"]
@@ -235,16 +226,10 @@ def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
     filters = [
         "mpdecimate",
         "yadif=mode=1",
-        # Lanczos — higher quality, slower than bicubic
         f"zscale=w={w}:h={h}:filter=lanczos:dither=random",
-        f"fps={fps}",
-        # Deeper S-curve for cinematic feel — raises shadows, controls highlights
-        "curves=r='0/0 0.05/0.02 0.5/0.55 0.95/0.98 1/1'"
-        ":g='0/0 0.05/0.02 0.5/0.53 0.95/0.97 1/1'"
-        ":b='0/0 0.05/0.03 0.5/0.51 0.95/0.96 1/1'",
-        # Stronger saturation — makes colours pop on OLED / high-contrast screens
-        "eq=saturation=1.35:brightness=0.025:contrast=1.06:gamma=1.04",
-        # Medium unsharp — sharpens edges and fine textures at 2K resolution
+        f"framerate=fps={fps}",
+        "curves=r='0/0 0.05/0.02 0.5/0.48 0.95/0.98 1/1':g='0/0 0.05/0.02 0.5/0.46 0.95/0.97 1/1':b='0/0 0.05/0.02 0.5/0.45 0.95/0.96 1/1'",
+        "eq=contrast=1.15:saturation=1.40:gamma=0.95",
         "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.25",
         _drawtext(wm, font_opt),
         "format=yuv420p",
@@ -255,28 +240,10 @@ def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # TIER 3 — 4K TRUE BEAST MODE
 # Goal: 25-30 minutes. Max CPU. Near-lossless. Cinematic.
-#
-# Chain (order matters):
-#   1. mpdecimate          — drop duplicate / near-duplicate frames
-#   2. yadif=mode=1        — clean deinterlace (bob, preserves motion)
-#   3. hqdn3d              — high-quality 3D denoise BEFORE upscale
-#                            (removes source noise so spline36 upscales
-#                             clean pixels, not noise)
-#   4. zscale spline36     — the BEST scaler FFmpeg has; slower than
-#                            lanczos but mathematically superior for 4K
-#   5. fps=60              — lock output frame rate
-#   6. Custom RGB curves   — cinema-grade S-curve:
-#                            deep shadows (lifted black floor),
-#                            rich mids, rolled-off highlights
-#   7. eq                  — saturation / contrast / gamma fine-tune
-#   8. unsharp (heavy)     — extreme edge + chroma sharpening for
-#                            razor-sharp 4K pixel detail
-#   9. drawtext watermark
-#  10. format=yuv420p
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
     """
-    True Beast Mode chain for 4K / veryslow / CRF 14.
+    True Beast Mode chain for 4K / veryslow / CRF 14 / 120 FPS.
     Every filter is tuned to squeeze the maximum cinematic quality
     out of a raw mobile / camera video clip.
     """
@@ -284,14 +251,8 @@ def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
     wm = _escape_wm(watermark_text)
     font_opt = f":fontfile='{_get_font_file()}'" if _get_font_file() else ""
 
-    # ── hqdn3d parameters ─────────────────────────────────────────────────────
-    # luma_spatial=4, luma_tmp=3, chroma_spatial=3, chroma_tmp=2.5
-    # Aggressive enough to kill sensor noise without smearing real edges.
     hqdn3d = "hqdn3d=luma_spatial=4:luma_tmp=3:chroma_spatial=3:chroma_tmp=2.5"
 
-    # ── spline36 upscale ─────────────────────────────────────────────────────
-    # spline36 is the gold standard for quality upscaling: no ringing,
-    # no aliasing, maximum sharpness retention.
     zscale = (
         f"zscale=w={w}:h={h}"
         ":filter=spline36"
@@ -301,39 +262,27 @@ def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
         ":matrix=709"
     )
 
-    # ── Cinema S-curve (per-channel RGB) ─────────────────────────────────────
-    # Lifted black floor (0.02 at input-0 and 0.04 at input-0.05) gives the
-    # classic cinematic "fade to grey" shadow look used in Hollywood grades.
-    # Rolled highlights (0.97 at input-0.95) prevent blown-out whites.
-    # Green channel is slightly more aggressive mid-boost for warmth.
+    # Cinema S-curve per-channel RGB (blacks start exactly at 0/0 to avoid washed-out look)
     curves = (
         "curves="
-        "r='0/0.02 0.05/0.06 0.30/0.32 0.50/0.56 0.75/0.78 0.95/0.96 1/0.98'"
-        ":g='0/0.02 0.05/0.07 0.30/0.33 0.50/0.58 0.75/0.79 0.95/0.97 1/0.99'"
-        ":b='0/0.02 0.05/0.05 0.30/0.30 0.50/0.52 0.75/0.76 0.95/0.95 1/0.97'"
+        "r='0/0 0.05/0.02 0.30/0.25 0.50/0.48 0.75/0.75 0.95/0.96 1/1'"
+        ":g='0/0 0.05/0.02 0.30/0.26 0.50/0.48 0.75/0.76 0.95/0.97 1/1'"
+        ":b='0/0 0.05/0.02 0.30/0.24 0.50/0.46 0.75/0.74 0.95/0.95 1/1'"
     )
 
-    # ── eq fine-tune ─────────────────────────────────────────────────────────
-    # After curves, we dial in saturation for vivid colours without
-    # over-saturation. contrast=1.08 adds the final punch.
-    eq = "eq=saturation=1.45:brightness=0.03:contrast=1.08:gamma=1.05"
+    eq = "eq=contrast=1.18:saturation=1.45:gamma=0.92"
 
-    # ── Heavy unsharp mask ────────────────────────────────────────────────────
-    # At 4K, edges are naturally larger in pixels. A stronger luma kernel
-    # (lx=7:ly=7) sharpens full pixel-level detail across hair, text,
-    # skin texture.  Chroma sharpening (cx=5:cy=5) ensures colours don't
-    # bleed across edges.
-    unsharp = "unsharp=lx=7:ly=7:la=0.8:cx=5:cy=5:ca=0.35"
+    unsharp = "unsharp=lx=5:ly=5:la=0.8:cx=5:cy=5:ca=0.35"
 
     filters = [
         "mpdecimate",
         "yadif=mode=1",
-        hqdn3d,       # Step 3: Denoise BEFORE upscale (critical order)
-        zscale,       # Step 4: spline36 upscale to 4K
-        f"fps={fps}", # Step 5: Lock to 60fps
-        curves,       # Step 6: Cinema S-curve grade
-        eq,           # Step 7: Saturation / contrast fine-tune
-        unsharp,      # Step 8: Extreme edge sharpening
+        hqdn3d,
+        zscale,
+        f"framerate=fps={fps}",
+        curves,
+        eq,
+        unsharp,
         _drawtext(wm, font_opt),
         "format=yuv420p",
     ]
