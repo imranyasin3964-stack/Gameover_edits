@@ -146,15 +146,14 @@ def _get_font_file() -> str:
 def _build_filter_chain(profile: dict, watermark_text: str) -> str:
     """
     Build the complete FFmpeg video filter chain for a given quality profile.
-
-    Filter Order (order MATTERS in FFmpeg):
-    1. scale   — Lanczos upscale to target resolution
-    2. minterpolate (blend) — Fast, clean FPS boost (no MCI = no artifacts)
-    3. curves  — S-curve contrast: makes darks darker, lights brighter = HDR punch
-    4. eq      — Boost saturation + subtle brightness/gamma for vivid colors
-    5. unsharp — Crisp pixel edges after upscale (mild strength = no halos)
-    6. drawtext — Watermark: semi-transparent, bottom-right
-    7. format  — Force yuv420p: CRITICAL — fixes color banding on all devices
+    Uses:
+      - mpdecimate to drop duplicate frames
+      - yadif=mode=1 to deinterlace cleanly if interlaced (bobs fields, double frame rate)
+      - zscale with Lanczos filter for high quality colorspace-aware scaling
+      - fps to double frame rate cleanly to target (60 or 120)
+      - S-curve color grading and unsharp mask
+      - watermark drawtext
+      - yuv420p format
     """
     w   = profile["width"]
     h   = profile["height"]
@@ -170,28 +169,32 @@ def _build_filter_chain(profile: dict, watermark_text: str) -> str:
     font_opt = f":fontfile='{font_file}'" if font_file else ""
 
     filters = [
-        # 1. High-quality Lanczos upscale to target resolution
-        f"scale={w}:{h}:flags=lanczos+accurate_rnd",
+        # Drop duplicates
+        "mpdecimate",
+        
+        # Fast clean deinterlacing if interlaced, double frame rate bob
+        "yadif=mode=1",
 
-        # 2. Frame rate boost — blend mode is 10x faster than MCI, no pixelation
-        f"minterpolate=fps={fps}:mi_mode=blend",
+        # Colorspace-aware zscale (Lanczos scaler) instead of standard scale
+        f"zscale=w={w}:h={h}:filter=lanczos",
 
-        # 3. S-curve contrast: HDR-like punch without blowing highlights
+        # Target Frame Rate
+        f"fps={fps}",
+
+        # S-curve contrast: HDR-like punch without blowing highlights
         "curves=preset=medium_contrast",
 
-        # 4. Saturation + brightness boost for vivid, vibrant colors
+        # Saturation + brightness boost for vivid, vibrant colors
         "eq=saturation=1.3:brightness=0.025:contrast=1.05:gamma=1.04",
 
-        # 5. Unsharp mask: restores crispness lost during upscale
-        #    luma  kernel 3x3, strength 0.5 — sharp but no halos
-        #    chroma kernel 3x3, strength 0.2 — subtle chroma sharpening
+        # Unsharp mask: restores crispness lost during upscale
         "unsharp=lx=3:ly=3:la=0.5:cx=3:cy=3:ca=0.2",
 
-        # 6. Watermark — white, 45% opacity, 20px from bottom-right corner
+        # Watermark — white, 45% opacity, 20px from bottom-right corner
         f"drawtext=text='{wm}':fontsize=28:fontcolor=white@0.45{font_opt}"
         f":x=w-tw-20:y=h-th-20:shadowx=1:shadowy=1:shadowcolor=black@0.5",
 
-        # 7. CRITICAL: Force yuv420p — prevents color banding on TVs/mobile
+        # Force yuv420p
         "format=yuv420p",
     ]
 

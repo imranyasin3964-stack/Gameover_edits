@@ -232,21 +232,9 @@ def register(app: Client):
 
         # 3. Refresh Stats
         elif data == "admin_stats_refresh":
-            await query.answer("🔄 Refreshing system stats...")
-            # We run the live loop 15 times (~45s of live tracking)
-            for idx in range(1, 16):
-                try:
-                    caption = await build_stats_caption(loop_idx=idx)
-                    await query.message.edit_text(
-                        caption,
-                        parse_mode=enums.ParseMode.HTML,
-                        reply_markup=_admin_keyboard()
-                    )
-                except Exception:
-                    break
-            # Set to static after loop ends
+            await query.answer("🔄 Refreshing stats...")
+            caption = await build_stats_caption()
             try:
-                caption = await build_stats_caption()
                 await query.message.edit_text(
                     caption,
                     parse_mode=enums.ParseMode.HTML,
@@ -332,10 +320,10 @@ def register(app: Client):
 
             try:
                 tgt_user = await client.get_users(target_id)
-                name_line = f"👤 <b>Name:</b> <code>{tgt_user.first_name} {tgt_user.last_name or ''}</code>\n"
+                name_line = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>{tgt_user.first_name} {tgt_user.last_name or ''}</a>\n"
                 mention_line = f"🔗 <b>Username:</b> @{tgt_user.username}\n" if tgt_user.username else ""
             except Exception:
-                name_line = "👤 <b>Name:</b> <code>Unknown (Never started bot)</code>\n"
+                name_line = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>Unknown</a> (Never started bot)\n"
                 mention_line = ""
 
             await query.message.edit_text(
@@ -395,10 +383,10 @@ def register(app: Client):
 
             try:
                 tgt_user = await client.get_users(target_id)
-                name_line = f"👤 <b>Name:</b> <code>{tgt_user.first_name} {tgt_user.last_name or ''}</code>\n"
+                name_line = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>{tgt_user.first_name} {tgt_user.last_name or ''}</a>\n"
                 mention_line = f"🔗 <b>Username:</b> @{tgt_user.username}\n" if tgt_user.username else ""
             except Exception:
-                name_line = "👤 <b>Name:</b> <code>Unknown (Never started bot)</code>\n"
+                name_line = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>Unknown</a> (Never started bot)\n"
                 mention_line = ""
 
             await message.reply_text(
