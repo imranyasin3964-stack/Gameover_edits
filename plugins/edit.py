@@ -259,13 +259,18 @@ def register(app: Client):
                         return
                     last_edit_time[0] = now
 
+                    size_line = ""
+                    if "size_mb" in info and info["size_mb"] > 0:
+                        size_line = f"📦 <b>Output Size:</b> <code>{info['size_mb']:.1f} MB</code>\n"
+
                     await _safe_edit(status_msg,
                         f"{info['step']}\n\n"
                         f"🆔 <b>Job ID:</b> <code>{job_id}</code>\n"
                         f"🎬 <b>Quality:</b> {info['quality']}\n"
-                        f"<code>{info['bar']}</code>\n"
+                        f"<code>{info['bar']}</code>\n\n"
                         f"⏱️ <b>Elapsed:</b> <code>{info['elapsed']}</code>\n"
-                        f"⏳ <b>ETA:</b> <code>{info['eta']}</code>"
+                        f"⏳ <b>ETA:</b> <code>{info['eta']}</code>\n"
+                        f"{size_line}"
                     )
 
                 output_path = await render_video(

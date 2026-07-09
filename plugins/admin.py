@@ -70,9 +70,10 @@ def _admin_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("💳 Add Credits", callback_data="admin_manage_credits"),
-            InlineKeyboardButton("💎 List VIPs", callback_data="admin_list_vips"),
+            InlineKeyboardButton("🎥 Change Start Video", callback_data="admin_change_start_video"),
         ],
         [
+            InlineKeyboardButton("💎 List VIPs", callback_data="admin_list_vips"),
             InlineKeyboardButton("❌ Close Panel", callback_data="admin_close_panel"),
         ]
     ])
@@ -288,6 +289,20 @@ def register(app: Client):
                 ])
             )
 
+        # 6.5. Change Start Video
+        elif data == "admin_change_start_video":
+            await query.answer()
+            set_state(owner_id, "waiting_start_video", chat_id)
+            await query.message.edit_text(
+                "🎥 <b>Change Welcome /start Video</b>\n\n"
+                "Please **send or forward** the video or GIF/animation you want to set as the welcome video/GIF.\n\n"
+                "<i>(The bot will use its Telegram File ID so it loads instantly!)</i>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
+                ])
+            )
+
         # 7. Action callbacks from User search status
         elif data.startswith("admin_act|"):
             parts = data.split("|")
@@ -456,3 +471,44 @@ def register(app: Client):
                 )
             except Exception:
                 pass
+
+        # ── Catch video/animation upload for Start Video ───────────────────────────
+        @app.on_message(filters.chat(Config.OWNER_ID) & (filters.video | filters.animation | filters.document))
+        async def admin_media_handler(client: Client, message: Message):
+            owner_id = message.from_user.id
+            state = get_state(owner_id)
+            if not state or state["quality"] != "waiting_start_video":
+                return
+
+            clear_state(owner_id)
+            file_id = None
+            file_type = "video"
+
+            if message.video:
+                file_id = message.video.file_id
+                file_type = "video"
+            elif message.animation:
+                file_id = message.animation.file_id
+                file_type = "animation"
+            elif message.document and message.document.mime_type and message.document.mime_type.startswith(("video/", "image/gif")):
+                file_id = message.document.file_id
+                file_type = "document"
+
+            if not file_id:
+                await message.reply_text("❌ <b>Unsupported file! Please upload a normal video or GIF.</b>", parse_mode=enums.ParseMode.HTML)
+                return
+
+            # Save setting
+            from core.db import set_setting
+            set_setting("start_video_file_id", file_id)
+            set_setting("start_video_type", file_type)
+
+            await message.reply_text(
+                f"✅ <b>Successfully updated start welcome {file_type}!</b>\n\n"
+                f"🔑 <b>File ID:</b> <code>{file_id[:25]}...{file_id[-10:]}</code>\n"
+                f"New users will now see this video/GIF on /start.",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
+                ])
+            )

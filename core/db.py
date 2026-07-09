@@ -57,6 +57,21 @@ def init_db(db_path: str = DB_PATH):
                 credits     INTEGER NOT NULL DEFAULT 0,
                 updated_at  TEXT NOT NULL
             );
+
+            -- Tracks all registered users
+            CREATE TABLE IF NOT EXISTS users (
+                user_id     INTEGER PRIMARY KEY,
+                username    TEXT,
+                first_name  TEXT,
+                last_name   TEXT,
+                joined_at   TEXT NOT NULL
+            );
+
+            -- Tracks dynamic bot settings
+            CREATE TABLE IF NOT EXISTS settings (
+                key         TEXT PRIMARY KEY,
+                value       TEXT
+            );
         """)
         conn.commit()
 
@@ -235,3 +250,45 @@ def get_all_time_total() -> int:
     with _connect() as conn:
         row = conn.execute("SELECT SUM(edit_count) as total FROM daily_usage").fetchone()
         return row["total"] if row["total"] else 0
+
+
+# ── Settings & User Management ──────────────────────────────────────────────────
+
+def add_user(user_id: int, username: str, first_name: str, last_name: str) -> bool:
+    """
+    Add a user to the database. Returns True if newly added, False if already exists.
+    """
+    joined_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        row = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE users SET username = ?, first_name = ?, last_name = ? WHERE user_id = ?",
+                (username or "", first_name or "", last_name or "", user_id)
+            )
+            conn.commit()
+            return False
+
+        conn.execute(
+            "INSERT INTO users (user_id, username, first_name, last_name, joined_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, username or "", first_name or "", last_name or "", joined_at)
+        )
+        conn.commit()
+        return True
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = ?",
+            (key, value, value)
+        )
+        conn.commit()

@@ -81,10 +81,35 @@ def register(app: Client):
     @app.on_message(filters.command("start"))
     async def start_command(client: Client, message: Message):
         user = message.from_user
-        name = user.first_name if user else "Friend"
+        if not user:
+            return
+        
+        name = user.first_name
 
-        remaining = get_remaining_edits(user.id, Config.DAILY_FREE_LIMIT) if user else 1
-        is_vip    = is_premium(user.id) if user else False
+        # ── User Registration & Admin Notification ──────────────────────────────────
+        from core.db import add_user, get_setting
+        is_new = add_user(
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name
+        )
+
+        if is_new:
+            try:
+                username_str = f" (@{user.username})" if user.username else ""
+                await client.send_message(
+                    Config.OWNER_ID,
+                    f"🔔 <b>New User Joined GAMEOVER EDITS!</b>\n\n"
+                    f"👤 <b>Name:</b> <a href='tg://user?id={user.id}'>{user.first_name} {user.last_name or ''}</a>{username_str}\n"
+                    f"🆔 <b>User ID:</b> <code>{user.id}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception as e:
+                print(f"[Help Plugin] ⚠️ Failed to notify owner: {e}")
+
+        remaining = get_remaining_edits(user.id, Config.DAILY_FREE_LIMIT)
+        is_vip    = is_premium(user.id)
 
         status_line = (
             "💎 <b>Status:</b> <code>PREMIUM — Unlimited Edits 🔓</code>"
@@ -105,15 +130,24 @@ def register(app: Client):
             f"Type /help for the full guide."
         )
 
-        if Config.START_VIDEO:
+        # Retrieve dynamic welcome media
+        db_start_video = get_setting("start_video_file_id", "")
+        db_video_type = get_setting("start_video_type", "video")
+        
+        start_source = db_start_video if db_start_video else Config.START_VIDEO
+
+        if start_source:
             try:
-                if Config.START_VIDEO.endswith(".gif"):
-                    await message.reply_animation(Config.START_VIDEO, caption=text, parse_mode=enums.ParseMode.HTML)
+                is_gif = (db_video_type == "animation" or 
+                          start_source.endswith(".gif") or 
+                          "animation" in db_video_type)
+                if is_gif:
+                    await message.reply_animation(start_source, caption=text, parse_mode=enums.ParseMode.HTML)
                 else:
-                    await message.reply_video(Config.START_VIDEO, caption=text, parse_mode=enums.ParseMode.HTML)
+                    await message.reply_video(start_source, caption=text, parse_mode=enums.ParseMode.HTML)
                 return
             except Exception as e:
-                print(f"[Help Plugin] ⚠️ Failed to send start video: {e}")
+                print(f"[Help Plugin] ⚠️ Failed to send start welcome video: {e}")
 
         await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
 
