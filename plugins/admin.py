@@ -2,14 +2,15 @@
 👑 GAMEOVER EDITS — Advanced Admin Panel
 Owner-only commands and interactive inline panels for:
   - Live system stats (CPU, RAM, Disk, Bandwidth speed)
+  - Time-based Premium subscription management (/give <id> <days>)
   - Custom credits search & management
-  - Premium (VIP) user management
+  - Dynamic welcome video changer
 """
 
 import os
-import sys
 import shutil
 import asyncio
+from datetime import datetime, timezone, timedelta
 from pyrogram import Client, filters, enums
 from pyrogram.types import (
     Message,
@@ -20,9 +21,11 @@ from pyrogram.types import (
 
 from config import Config
 from core.db import (
-    add_premium, remove_premium, list_premium_users,
+    grant_premium, add_premium, remove_premium, list_premium_users,
+    get_premium_expiry, count_active_premium,
     get_total_edits_today, get_all_time_total,
-    add_credits, get_credits, get_today_count
+    add_credits, get_credits, get_today_count,
+    is_premium,
 )
 from core.queue import render_queue
 from core.states import set_state, get_state, clear_state
@@ -33,48 +36,72 @@ def _is_owner(user_id: int) -> bool:
     return user_id == Config.OWNER_ID
 
 
-# ── System Stats Utility ───────────────────────────────────────────────────────
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# ── Expiry helpers ──────────────────────────────────────────────────────────────
+
+def _format_expiry(expiry_dt: datetime) -> str:
+    """Return a clean, human-readable expiry string in UTC."""
+    return expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _time_remaining(expiry_dt: datetime) -> str:
+    """Return a compact 'Xd Yh Zm' remaining string, or 'Expired'."""
+    diff = expiry_dt - _now_utc()
+    total_secs = int(diff.total_seconds())
+    if total_secs <= 0:
+        return "Expired"
+    days    = total_secs // 86400
+    hours   = (total_secs % 86400) // 3600
+    minutes = (total_secs % 3600) // 60
+    parts   = []
+    if days:    parts.append(f"{days}d")
+    if hours:   parts.append(f"{hours}h")
+    if minutes: parts.append(f"{minutes}m")
+    return " ".join(parts) if parts else "< 1m"
+
+
+# ── System Stats Utility ────────────────────────────────────────────────────────
 
 async def get_live_system_stats():
     """Retrieve non-blocking live CPU, RAM, and network speeds."""
-    cpu = psutil.cpu_percent(interval=None)
-    mem = psutil.virtual_memory().percent
+    cpu   = psutil.cpu_percent(interval=None)
+    mem   = psutil.virtual_memory().percent
     net_1 = psutil.net_io_counters()
-    
     await asyncio.sleep(1.0)
-    
     net_2 = psutil.net_io_counters()
     sent_speed_kb = (net_2.bytes_sent - net_1.bytes_sent) / 1024.0
     recv_speed_kb = (net_2.bytes_recv - net_1.bytes_recv) / 1024.0
-    
     return cpu, mem, sent_speed_kb, recv_speed_kb
 
 
 def _get_disk_str() -> str:
     try:
         disk = shutil.disk_usage("downloads")
-        disk_used_mb = (disk.total - disk.free) / (1024 ** 2)
+        disk_used_mb  = (disk.total - disk.free) / (1024 ** 2)
         disk_total_mb = disk.total / (1024 ** 2)
         return f"{disk_used_mb:.1f} MB / {disk_total_mb:.1f} MB"
     except Exception:
         return "N/A"
 
 
-# ── Admin Keyboard Menu ────────────────────────────────────────────────────────
+# ── Admin Keyboard Menu ─────────────────────────────────────────────────────────
 
 def _admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🖥️ Refresh Stats", callback_data="admin_stats_refresh"),
-            InlineKeyboardButton("🔍 Search User ID", callback_data="admin_search_user"),
+            InlineKeyboardButton("🖥️ Refresh Stats",    callback_data="admin_stats_refresh"),
+            InlineKeyboardButton("🔍 Search User ID",   callback_data="admin_search_user"),
         ],
         [
-            InlineKeyboardButton("💳 Add Credits", callback_data="admin_manage_credits"),
-            InlineKeyboardButton("🎥 Change Start Video", callback_data="admin_change_start_video"),
+            InlineKeyboardButton("💳 Add Credits",         callback_data="admin_manage_credits"),
+            InlineKeyboardButton("🎥 Change Start Video",  callback_data="admin_change_start_video"),
         ],
         [
-            InlineKeyboardButton("💎 List VIPs", callback_data="admin_list_vips"),
-            InlineKeyboardButton("❌ Close Panel", callback_data="admin_close_panel"),
+            InlineKeyboardButton("💎 List Active VIPs",    callback_data="admin_list_vips"),
+            InlineKeyboardButton("❌ Close Panel",          callback_data="admin_close_panel"),
         ]
     ])
 
@@ -83,13 +110,13 @@ async def build_stats_caption(loop_idx: int = 0) -> str:
     """Build the statistics text screen."""
     today_total   = get_total_edits_today()
     alltime_total = get_all_time_total()
-    premium_count = len(list_premium_users())
+    premium_count = count_active_premium()
     queue_size    = render_queue.queue_size()
     is_rendering  = render_queue.is_busy()
     curr_user     = render_queue.current_user()
 
     cpu, mem, up_kb, down_kb = await get_live_system_stats()
-    disk_str = _get_disk_str()
+    disk_str      = _get_disk_str()
     queue_user_str = f" (User: <code>{curr_user}</code>)" if curr_user else ""
 
     refresh_indicator = (
@@ -103,7 +130,7 @@ async def build_stats_caption(loop_idx: int = 0) -> str:
         f"{refresh_indicator}\n\n"
         f"📈 <b>Renders Today:</b> <code>{today_total}</code>\n"
         f"🎬 <b>All-Time Renders:</b> <code>{alltime_total}</code>\n"
-        f"💎 <b>Premium Users:</b> <code>{premium_count}</code>\n\n"
+        f"💎 <b>Active Premium Users:</b> <code>{premium_count}</code>\n\n"
         f"🖥️ <b>CPU Usage:</b> <code>{cpu}%</code>\n"
         f"💾 <b>RAM Usage:</b> <code>{mem}%</code>\n"
         f"📊 <b>Disk Space:</b> <code>{disk_str}</code>\n\n"
@@ -114,11 +141,64 @@ async def build_stats_caption(loop_idx: int = 0) -> str:
     )
 
 
-# ── Register Code ──────────────────────────────────────────────────────────────
+# ── User Status Card builder ────────────────────────────────────────────────────
+
+def _build_user_status_card(target_id: int) -> str:
+    """Build the text portion of a user-status card (no Telegram API call needed)."""
+    vip        = is_premium(target_id)
+    credits    = get_credits(target_id)
+    used_today = get_today_count(target_id)
+    expiry_dt  = get_premium_expiry(target_id)
+
+    from config import Config as _Config
+    if vip and target_id == _Config.OWNER_ID:
+        vip_str = "💎 <b>Premium (VIP):</b> <code>OWNER — Permanent 👑</code>"
+    elif vip and expiry_dt:
+        remaining = _time_remaining(expiry_dt)
+        expiry_f  = _format_expiry(expiry_dt)
+        vip_str   = (
+            f"💎 <b>Premium (VIP):</b> <code>Active ✅</code>\n"
+            f"   ⏳ <b>Expires:</b> <code>{expiry_f}</code>\n"
+            f"   ⌛ <b>Remaining:</b> <code>{remaining}</code>"
+        )
+    else:
+        vip_str = "🆓 <b>Premium (VIP):</b> <code>No — Free limits apply</code>"
+
+    credits_str  = f"💳 <b>Custom Credits:</b> <code>{credits}</code>"
+    used_str     = f"🎬 <b>Edits Used Today:</b> <code>{used_today} / {Config.DAILY_FREE_LIMIT}</code>"
+
+    return f"{vip_str}\n{credits_str}\n{used_str}"
+
+
+def _user_action_keyboard(target_id: int) -> InlineKeyboardMarkup:
+    """Action buttons shown on a user status card."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("➕ 5 Credits",  callback_data=f"admin_act|addcr|{target_id}|5"),
+            InlineKeyboardButton("➕ 10 Credits", callback_data=f"admin_act|addcr|{target_id}|10"),
+        ],
+        [
+            InlineKeyboardButton("💎 Give 30d Premium",  callback_data=f"admin_act|give30|{target_id}"),
+            InlineKeyboardButton("💎 Give 7d Premium",   callback_data=f"admin_act|give7|{target_id}"),
+        ],
+        [
+            InlineKeyboardButton("💎 Give 1d Premium",   callback_data=f"admin_act|give1|{target_id}"),
+            InlineKeyboardButton("❌ Revoke Premium",     callback_data=f"admin_act|remvip|{target_id}"),
+        ],
+        [
+            InlineKeyboardButton("🧹 Clear Credits",     callback_data=f"admin_act|clearcr|{target_id}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main"),
+        ]
+    ])
+
+
+# ── Register ────────────────────────────────────────────────────────────────────
 
 def register(app: Client):
 
-    # ── /stats or /admin Command ───────────────────────────────────────────────
+    # ── /admin or /stats ───────────────────────────────────────────────────────
     @app.on_message(filters.command(["stats", "admin"]))
     async def admin_panel_cmd(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
@@ -129,7 +209,6 @@ def register(app: Client):
             "📊 <b>Loading system statistics...</b>",
             parse_mode=enums.ParseMode.HTML
         )
-        
         caption = await build_stats_caption()
         await status_msg.edit_text(
             caption,
@@ -137,16 +216,83 @@ def register(app: Client):
             reply_markup=_admin_keyboard()
         )
 
-    # ── Admin Command Actions (Traditional Commands) ───────────────────────────
-    @app.on_message(filters.command("addpremium"))
-    async def add_premium_cmd(client: Client, message: Message):
+    # ── /give <user_id> [days]  (/addpremium alias) ────────────────────────────
+    @app.on_message(filters.command(["give", "addpremium"]))
+    async def give_premium_cmd(client: Client, message: Message):
+        if not message.from_user or not _is_owner(message.from_user.id):
+            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
+            return
+
+        args = message.command[1:]  # everything after the command word
+
+        if not args:
+            await message.reply_text(
+                "⚠️ <b>Usage:</b> <code>/give &lt;user_id&gt; [days]</code>\n\n"
+                "Examples:\n"
+                "  <code>/give 123456789 7</code> — 7 days\n"
+                "  <code>/give 123456789 30</code> — 30 days\n"
+                "  <code>/give 123456789</code>    — defaults to 30 days",
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        try:
+            target_id = int(args[0])
+        except ValueError:
+            await message.reply_text("❌ <b>Invalid user ID.</b>", parse_mode=enums.ParseMode.HTML)
+            return
+
+        days = 30  # default
+        if len(args) >= 2:
+            try:
+                days = int(args[1])
+                if days <= 0:
+                    raise ValueError
+            except ValueError:
+                await message.reply_text(
+                    "❌ <b>Days must be a positive integer.</b>\n"
+                    "Example: <code>/give 123456789 14</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return
+
+        expiry_dt  = grant_premium(target_id, days=days, added_by=message.from_user.id)
+        expiry_str = _format_expiry(expiry_dt)
+
+        await message.reply_text(
+            f"✅ <b>Premium Granted!</b>\n\n"
+            f"🆔 <b>User ID:</b> <code>{target_id}</code>\n"
+            f"📅 <b>Duration:</b> <code>{days} day(s)</code>\n"
+            f"⏰ <b>Expiry:</b> <code>{expiry_str}</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        # Notify the user
+        try:
+            await client.send_message(
+                target_id,
+                f"🎉 <b>Congratulations! You've been upgraded to GAMEOVER EDITS Premium!</b>\n\n"
+                f"💎 <b>Duration:</b> <code>{days} day(s)</code>\n"
+                f"⏰ <b>Access until:</b> <code>{expiry_str}</code>\n\n"
+                f"✅ You now have:\n"
+                f"  • Unlimited daily edits\n"
+                f"  • 4K Beast Mode unlocked 🔓\n\n"
+                f"Type /edit to start rendering! 🚀",
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass  # User may not have started the bot yet
+
+    # ── /removepremium <user_id> ───────────────────────────────────────────────
+    @app.on_message(filters.command("removepremium"))
+    async def remove_premium_cmd(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
             await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         if len(message.command) < 2:
             await message.reply_text(
-                "⚠️ <b>Usage:</b> <code>/addpremium &lt;user_id&gt;</code>",
+                "⚠️ <b>Usage:</b> <code>/removepremium &lt;user_id&gt;</code>",
                 parse_mode=enums.ParseMode.HTML
             )
             return
@@ -157,28 +303,29 @@ def register(app: Client):
             await message.reply_text("❌ <b>Invalid user ID.</b>", parse_mode=enums.ParseMode.HTML)
             return
 
-        add_premium(target_id, added_by=message.from_user.id)
-        await message.reply_text(f"✅ User <code>{target_id}</code> is now VIP Premium.", parse_mode=enums.ParseMode.HTML)
+        removed = remove_premium(target_id)
+        if removed:
+            await message.reply_text(
+                f"✅ Premium access for <code>{target_id}</code> has been <b>revoked</b>.",
+                parse_mode=enums.ParseMode.HTML
+            )
+            try:
+                await client.send_message(
+                    target_id,
+                    "⚠️ <b>Your GAMEOVER EDITS Premium subscription has been removed.</b>\n"
+                    "You have been reverted to the Free plan.\n\n"
+                    "Contact the admin to renew.",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception:
+                pass
+        else:
+            await message.reply_text(
+                f"ℹ️ <code>{target_id}</code> was not in the premium list.",
+                parse_mode=enums.ParseMode.HTML
+            )
 
-    @app.on_message(filters.command("removepremium"))
-    async def remove_premium_cmd(client: Client, message: Message):
-        if not message.from_user or not _is_owner(message.from_user.id):
-            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
-            return
-
-        if len(message.command) < 2:
-            await message.reply_text("⚠️ <b>Usage:</b> <code>/removepremium &lt;user_id&gt;</code>", parse_mode=enums.ParseMode.HTML)
-            return
-
-        try:
-            target_id = int(message.command[1])
-        except ValueError:
-            await message.reply_text("❌ <b>Invalid user ID.</b>", parse_mode=enums.ParseMode.HTML)
-            return
-
-        remove_premium(target_id)
-        await message.reply_text(f"✅ Premium VIP access removed from <code>{target_id}</code>.", parse_mode=enums.ParseMode.HTML)
-
+    # ── /addcredits <user_id> <amount> ─────────────────────────────────────────
     @app.on_message(filters.command("addcredits"))
     async def add_credits_command(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
@@ -186,19 +333,23 @@ def register(app: Client):
             return
 
         if len(message.command) < 3:
-            await message.reply_text("⚠️ <b>Usage:</b> <code>/addcredits &lt;user_id&gt; &lt;amount&gt;</code>", parse_mode=enums.ParseMode.HTML)
+            await message.reply_text(
+                "⚠️ <b>Usage:</b> <code>/addcredits &lt;user_id&gt; &lt;amount&gt;</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
             return
 
         try:
             target_id = int(message.command[1])
-            amount = int(message.command[2])
+            amount    = int(message.command[2])
         except ValueError:
             await message.reply_text("❌ <b>Invalid ID or amount.</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         new_total = add_credits(target_id, amount)
         await message.reply_text(
-            f"✅ User <code>{target_id}</code> balance updated. New total: <code>{new_total} credits</code>.",
+            f"✅ User <code>{target_id}</code> balance updated. "
+            f"New total: <code>{new_total} credits</code>.",
             parse_mode=enums.ParseMode.HTML
         )
 
@@ -220,7 +371,7 @@ def register(app: Client):
             await query.message.delete()
             return
 
-        # 2. Main Menu Back
+        # 2. Back to Main Menu
         elif data == "admin_back_main":
             clear_state(owner_id)
             await query.answer("Returned to Menu")
@@ -257,7 +408,7 @@ def register(app: Client):
                 ])
             )
 
-        # 5. Manage Credits (custom amount input)
+        # 5. Add Credits (interactive)
         elif data == "admin_manage_credits":
             await query.answer()
             set_state(owner_id, "waiting_credit_amount", chat_id)
@@ -266,23 +417,37 @@ def register(app: Client):
                 "Send the <b>User ID</b> and <b>Amount</b> separated by space:\n"
                 "Format: <code>[User_ID] [Amount]</code>\n"
                 "Example: <code>12345678 10</code>\n\n"
-                "<i>(Send negative value to subtract)</i>",
+                "<i>(Send a negative value to subtract credits)</i>",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
                 ])
             )
 
-        # 6. List VIPs
+        # 6. List Active VIPs
         elif data == "admin_list_vips":
             await query.answer()
             vips = list_premium_users()
             if not vips:
-                vips_str = "No VIP premium users registered."
+                vips_str = "<i>No active Premium subscribers.</i>"
             else:
-                vips_str = "\n".join(f"• <code>{uid}</code>" for uid in vips)
+                lines = []
+                for v in vips:
+                    uid = v["user_id"]
+                    try:
+                        expiry_dt = datetime.fromisoformat(v["expiry_date"])
+                        remaining = _time_remaining(expiry_dt)
+                        expiry_f  = _format_expiry(expiry_dt)
+                        lines.append(
+                            f"• <code>{uid}</code> — ⏳ <code>{remaining}</code> "
+                            f"<i>(until {expiry_f})</i>"
+                        )
+                    except Exception:
+                        lines.append(f"• <code>{uid}</code>")
+                vips_str = "\n".join(lines)
+
             await query.message.edit_text(
-                f"💎 <b>VIP Premium Users:</b>\n\n{vips_str}",
+                f"💎 <b>Active Premium Subscribers ({len(vips)}):</b>\n\n{vips_str}",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
@@ -295,50 +460,84 @@ def register(app: Client):
             set_state(owner_id, "waiting_start_video", chat_id)
             await query.message.edit_text(
                 "🎥 <b>Change Welcome /start Video</b>\n\n"
-                "Please **send or forward** the video or GIF/animation you want to set as the welcome video/GIF.\n\n"
-                "<i>(The bot will use its Telegram File ID so it loads instantly!)</i>",
+                "Send or forward the video or GIF you want new users to see on /start.\n\n"
+                "<i>(The bot stores its Telegram File ID — loads instantly for all users.)</i>",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main")]
                 ])
             )
 
-        # 7. Action callbacks from User search status
+        # 7. Action buttons on User Status card
         elif data.startswith("admin_act|"):
-            parts = data.split("|")
+            parts  = data.split("|")
             action = parts[1]
             target_id = int(parts[2])
 
             if action == "addcr":
-                amount = int(parts[3])
-                new_total = add_credits(target_id, amount)
-                await query.answer(f"Added {amount} credits!")
+                amount    = int(parts[3])
+                add_credits(target_id, amount)
+                await query.answer(f"✅ Added {amount} credits!")
+
             elif action == "clearcr":
                 current = get_credits(target_id)
-                new_total = add_credits(target_id, -current)
+                add_credits(target_id, -current)
                 await query.answer("Credits cleared!")
+
+            elif action.startswith("give"):
+                # give30 / give7 / give1
+                days_map = {"give30": 30, "give7": 7, "give1": 1}
+                days     = days_map.get(action, 30)
+                expiry_dt = grant_premium(target_id, days=days, added_by=owner_id)
+                await query.answer(f"✅ {days}d Premium granted!")
+                # Notify the user silently
+                try:
+                    expiry_str = _format_expiry(expiry_dt)
+                    await client.send_message(
+                        target_id,
+                        f"🎉 <b>You've been upgraded to GAMEOVER EDITS Premium!</b>\n\n"
+                        f"💎 <b>Duration:</b> <code>{days} day(s)</code>\n"
+                        f"⏰ <b>Access until:</b> <code>{expiry_str}</code>\n\n"
+                        f"Unlimited edits + 4K Beast Mode unlocked 🔓\n"
+                        f"Type /edit to start! 🚀",
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+
             elif action == "makevip":
-                add_premium(target_id, added_by=owner_id)
-                await query.answer("User upgraded to Premium VIP!")
+                # Legacy button: 30-day grant
+                expiry_dt = grant_premium(target_id, days=30, added_by=owner_id)
+                await query.answer("✅ 30-day Premium granted!")
+
             elif action == "remvip":
                 remove_premium(target_id)
-                await query.answer("Premium VIP revoked!")
+                await query.answer("❌ Premium revoked!")
+                try:
+                    await client.send_message(
+                        target_id,
+                        "⚠️ <b>Your GAMEOVER EDITS Premium has been removed.</b>\n"
+                        "You are now on the Free plan. Contact admin to renew.",
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception:
+                    pass
 
-            # Redraw status
-            vip = is_premium(target_id)
-            credits = get_credits(target_id)
-            used_today = get_today_count(target_id)
-
-            vip_str = "💎 <b>Premium (VIP):</b> <code>Yes (Unlimited) 🔓</code>" if vip else "🆓 <b>Premium (VIP):</b> <code>No (Free limits apply)</code>"
-            credits_str = f"💳 <b>Custom Credits:</b> <code>{credits}</code>"
-            used_str = f"🎬 <b>Edits Used Today:</b> <code>{used_today} / {Config.DAILY_FREE_LIMIT}</code>"
-
+            # Redraw the status card
+            status_body = _build_user_status_card(target_id)
             try:
-                tgt_user = await client.get_users(target_id)
-                name_line = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>{tgt_user.first_name} {tgt_user.last_name or ''}</a>\n"
-                mention_line = f"🔗 <b>Username:</b> @{tgt_user.username}\n" if tgt_user.username else ""
+                tgt_user   = await client.get_users(target_id)
+                name_line  = (
+                    f"👤 <b>Name:</b> "
+                    f"<a href='tg://user?id={target_id}'>"
+                    f"{tgt_user.first_name} {tgt_user.last_name or ''}</a>\n"
+                )
+                mention_line = (
+                    f"🔗 <b>Username:</b> @{tgt_user.username}\n"
+                    if tgt_user.username else ""
+                )
             except Exception:
-                name_line = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>Unknown</a> (Never started bot)\n"
+                name_line    = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>Unknown</a>\n"
                 mention_line = ""
 
             await query.message.edit_text(
@@ -346,37 +545,24 @@ def register(app: Client):
                 f"🆔 <b>User ID:</b> <code>{target_id}</code>\n"
                 f"{name_line}"
                 f"{mention_line}"
-                f"{vip_str}\n"
-                f"{credits_str}\n"
-                f"{used_str}",
+                f"{status_body}",
                 parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("➕ Add 5 Credits", callback_data=f"admin_act|addcr|{target_id}|5"),
-                        InlineKeyboardButton("➕ Add 10 Credits", callback_data=f"admin_act|addcr|{target_id}|10"),
-                    ],
-                    [
-                        InlineKeyboardButton("💎 Make Premium", callback_data=f"admin_act|makevip|{target_id}"),
-                        InlineKeyboardButton("❌ Revoke Premium", callback_data=f"admin_act|remvip|{target_id}"),
-                    ],
-                    [
-                        InlineKeyboardButton("🧹 Clear Custom Credits", callback_data=f"admin_act|clearcr|{target_id}"),
-                    ],
-                    [
-                        InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main"),
-                    ]
-                ])
+                reply_markup=_user_action_keyboard(target_id)
             )
 
-    # ── Message Input Handler (Catches text inputs for user search & credits) ──
-    @app.on_message(filters.chat(Config.OWNER_ID) & filters.text & ~filters.command(["admin", "stats", "start", "help", "premium", "edit"]))
+    # ── Message Input Handler ──────────────────────────────────────────────────
+    @app.on_message(
+        filters.chat(Config.OWNER_ID) & filters.text
+        & ~filters.command(["admin", "stats", "start", "help", "premium",
+                             "edit", "give", "addpremium", "removepremium",
+                             "addcredits", "myplan"])
+    )
     async def admin_input_handler(client: Client, message: Message):
         owner_id = message.from_user.id
-        state = get_state(owner_id)
+        state    = get_state(owner_id)
         if not state:
             return
 
-        chat_id = message.chat.id
         step = state["quality"]
 
         # A. User ID Search
@@ -388,20 +574,24 @@ def register(app: Client):
                 await message.reply_text("❌ <b>Numeric User ID only!</b>", parse_mode=enums.ParseMode.HTML)
                 return
 
-            vip = is_premium(target_id)
-            credits = get_credits(target_id)
-            used_today = get_today_count(target_id)
-
-            vip_str = "💎 <b>Premium (VIP):</b> <code>Yes (Unlimited) 🔓</code>" if vip else "🆓 <b>Premium (VIP):</b> <code>No (Free limits)</code>"
-            credits_str = f"💳 <b>Custom Credits:</b> <code>{credits}</code>"
-            used_str = f"🎬 <b>Edits Used Today:</b> <code>{used_today} / {Config.DAILY_FREE_LIMIT}</code>"
-
+            status_body = _build_user_status_card(target_id)
             try:
-                tgt_user = await client.get_users(target_id)
-                name_line = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>{tgt_user.first_name} {tgt_user.last_name or ''}</a>\n"
-                mention_line = f"🔗 <b>Username:</b> @{tgt_user.username}\n" if tgt_user.username else ""
+                tgt_user   = await client.get_users(target_id)
+                name_line  = (
+                    f"👤 <b>Name:</b> "
+                    f"<a href='tg://user?id={target_id}'>"
+                    f"{tgt_user.first_name} {tgt_user.last_name or ''}</a>\n"
+                )
+                mention_line = (
+                    f"🔗 <b>Username:</b> @{tgt_user.username}\n"
+                    if tgt_user.username else ""
+                )
             except Exception:
-                name_line = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>Unknown</a> (Never started bot)\n"
+                name_line    = (
+                    f"👤 <b>Name:</b> "
+                    f"<a href='tg://user?id={target_id}'>Unknown</a> "
+                    f"(Never started bot)\n"
+                )
                 mention_line = ""
 
             await message.reply_text(
@@ -409,35 +599,18 @@ def register(app: Client):
                 f"🆔 <b>User ID:</b> <code>{target_id}</code>\n"
                 f"{name_line}"
                 f"{mention_line}"
-                f"{vip_str}\n"
-                f"{credits_str}\n"
-                f"{used_str}",
+                f"{status_body}",
                 parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("➕ Add 5 Credits", callback_data=f"admin_act|addcr|{target_id}|5"),
-                        InlineKeyboardButton("➕ Add 10 Credits", callback_data=f"admin_act|addcr|{target_id}|10"),
-                    ],
-                    [
-                        InlineKeyboardButton("💎 Make Premium", callback_data=f"admin_act|makevip|{target_id}"),
-                        InlineKeyboardButton("❌ Revoke Premium", callback_data=f"admin_act|remvip|{target_id}"),
-                    ],
-                    [
-                        InlineKeyboardButton("🧹 Clear Custom Credits", callback_data=f"admin_act|clearcr|{target_id}"),
-                    ],
-                    [
-                        InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main"),
-                    ]
-                ])
+                reply_markup=_user_action_keyboard(target_id)
             )
 
-        # B. Custom Credit Add
+        # B. Custom Credits Add
         elif step == "waiting_credit_amount":
             clear_state(owner_id)
             parts = message.text.strip().split()
             if len(parts) < 2:
                 await message.reply_text(
-                    "❌ <b>Format must be:</b> <code>[User_ID] [Amount]</code>\n"
+                    "❌ <b>Format:</b> <code>[User_ID] [Amount]</code>\n"
                     "Example: <code>12345678 15</code>",
                     parse_mode=enums.ParseMode.HTML
                 )
@@ -445,14 +618,14 @@ def register(app: Client):
 
             try:
                 target_id = int(parts[0])
-                amount = int(parts[1])
+                amount    = int(parts[1])
             except ValueError:
                 await message.reply_text("❌ <b>Values must be integers!</b>", parse_mode=enums.ParseMode.HTML)
                 return
 
             new_total = add_credits(target_id, amount)
             await message.reply_text(
-                f"✅ <b>Credits balance updated!</b>\n\n"
+                f"✅ <b>Credits updated!</b>\n\n"
                 f"🆔 <b>User ID:</b> <code>{target_id}</code>\n"
                 f"📊 <b>Change:</b> <code>{'+' if amount >= 0 else ''}{amount} credits</code>\n"
                 f"💰 <b>New Balance:</b> <code>{new_total} credits</code>",
@@ -464,51 +637,60 @@ def register(app: Client):
             try:
                 await client.send_message(
                     target_id,
-                    f"🎁 <b>You have received {amount} custom render credits from the Admin!</b>\n"
+                    f"🎁 <b>You received {amount} render credits from the Admin!</b>\n"
                     f"💰 <b>Current Balance:</b> <code>{new_total} credits</code>\n\n"
-                    f"Type /edit to use your credits!",
+                    f"Type /edit to use them!",
                     parse_mode=enums.ParseMode.HTML
                 )
             except Exception:
                 pass
 
-        # ── Catch video/animation upload for Start Video ───────────────────────────
-        @app.on_message(filters.chat(Config.OWNER_ID) & (filters.video | filters.animation | filters.document))
-        async def admin_media_handler(client: Client, message: Message):
-            owner_id = message.from_user.id
-            state = get_state(owner_id)
-            if not state or state["quality"] != "waiting_start_video":
-                return
+    # ── Media Handler: owner uploads new Start Video ───────────────────────────
+    @app.on_message(
+        filters.chat(Config.OWNER_ID)
+        & (filters.video | filters.animation | filters.document)
+    )
+    async def admin_media_handler(client: Client, message: Message):
+        owner_id = message.from_user.id
+        state    = get_state(owner_id)
+        if not state or state["quality"] != "waiting_start_video":
+            return
 
-            clear_state(owner_id)
-            file_id = None
+        clear_state(owner_id)
+        file_id   = None
+        file_type = "video"
+
+        if message.video:
+            file_id   = message.video.file_id
             file_type = "video"
+        elif message.animation:
+            file_id   = message.animation.file_id
+            file_type = "animation"
+        elif (
+            message.document
+            and message.document.mime_type
+            and message.document.mime_type.startswith(("video/", "image/gif"))
+        ):
+            file_id   = message.document.file_id
+            file_type = "document"
 
-            if message.video:
-                file_id = message.video.file_id
-                file_type = "video"
-            elif message.animation:
-                file_id = message.animation.file_id
-                file_type = "animation"
-            elif message.document and message.document.mime_type and message.document.mime_type.startswith(("video/", "image/gif")):
-                file_id = message.document.file_id
-                file_type = "document"
-
-            if not file_id:
-                await message.reply_text("❌ <b>Unsupported file! Please upload a normal video or GIF.</b>", parse_mode=enums.ParseMode.HTML)
-                return
-
-            # Save setting
-            from core.db import set_setting
-            set_setting("start_video_file_id", file_id)
-            set_setting("start_video_type", file_type)
-
+        if not file_id:
             await message.reply_text(
-                f"✅ <b>Successfully updated start welcome {file_type}!</b>\n\n"
-                f"🔑 <b>File ID:</b> <code>{file_id[:25]}...{file_id[-10:]}</code>\n"
-                f"New users will now see this video/GIF on /start.",
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
-                ])
+                "❌ <b>Unsupported file! Please upload a video or GIF.</b>",
+                parse_mode=enums.ParseMode.HTML
             )
+            return
+
+        from core.db import set_setting
+        set_setting("start_video_file_id", file_id)
+        set_setting("start_video_type", file_type)
+
+        await message.reply_text(
+            f"✅ <b>Welcome {file_type} updated successfully!</b>\n\n"
+            f"🔑 <b>File ID:</b> <code>{file_id[:25]}...{file_id[-10:]}</code>\n"
+            f"All new users will now see this on /start.",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main")]
+            ])
+        )

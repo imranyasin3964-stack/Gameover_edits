@@ -6,7 +6,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
 from config import Config
-from core.db import get_remaining_edits, is_premium
+from core.db import get_remaining_edits, is_premium, get_premium_expiry
 
 
 HELP_TEXT = """
@@ -177,3 +177,95 @@ def register(app: Client):
             PREMIUM_TEXT.format(owner_mention=owner_mention),
             parse_mode=enums.ParseMode.HTML,
         )
+
+    @app.on_message(filters.command("myplan"))
+    async def myplan_command(client: Client, message: Message):
+        """Show the user their current subscription status and exact time remaining."""
+        from datetime import datetime, timezone, timedelta
+
+        user = message.from_user
+        if not user:
+            return
+
+        vip       = is_premium(user.id)
+        expiry_dt = get_premium_expiry(user.id)
+        remaining = get_remaining_edits(user.id, Config.DAILY_FREE_LIMIT)
+
+        # ── Owner ──────────────────────────────────────────────────────────────
+        if user.id == Config.OWNER_ID:
+            await message.reply_text(
+                f"👑 <b>Your Plan: OWNER</b>\n\n"
+                f"You have <b>permanent, unlimited</b> access to all features.\n"
+                f"💎 4K Beast Mode unlocked 🔓\n"
+                f"♾️ Unlimited daily renders",
+                parse_mode=enums.ParseMode.HTML,
+            )
+            return
+
+        # ── Active Premium ─────────────────────────────────────────────────────
+        if vip and expiry_dt:
+            now_utc   = datetime.now(timezone.utc)
+            diff      = expiry_dt - now_utc
+            total_sec = int(diff.total_seconds())
+
+            if total_sec > 0:
+                days    = total_sec // 86400
+                hours   = (total_sec % 86400) // 3600
+                minutes = (total_sec % 3600) // 60
+
+                # Build a clear remaining string
+                remaining_parts = []
+                if days:    remaining_parts.append(f"{days} day(s)")
+                if hours:   remaining_parts.append(f"{hours} hour(s)")
+                if minutes: remaining_parts.append(f"{minutes} minute(s)")
+                remaining_str = ", ".join(remaining_parts) if remaining_parts else "less than 1 minute"
+
+                expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
+
+                # Urgency hint
+                if total_sec < 86400:       # less than 1 day
+                    urgency = "\n\n⚠️ <b>Your subscription expires very soon!</b> Contact admin to renew."
+                elif total_sec < 86400 * 3: # less than 3 days
+                    urgency = "\n\n🔔 <b>Tip:</b> Your plan expires in less than 3 days."
+                else:
+                    urgency = ""
+
+                await message.reply_text(
+                    f"💎 <b>Your Plan: PREMIUM</b>\n\n"
+                    f"✅ Status: <code>Active</code>\n"
+                    f"⏰ <b>Expires:</b> <code>{expiry_str}</code>\n"
+                    f"⌛ <b>Time Remaining:</b> <code>{remaining_str}</code>\n\n"
+                    f"<b>Included:</b>\n"
+                    f"  ✅ Unlimited daily edits\n"
+                    f"  ✅ All quality modes (1080p / 2K / 4K)\n"
+                    f"  ✅ 4K Beast Mode unlocked 🔓"
+                    f"{urgency}",
+                    parse_mode=enums.ParseMode.HTML,
+                )
+                return
+
+        # ── Free User (or expired premium) ────────────────────────────────────
+        edits_left = max(0, remaining) if remaining >= 0 else 0
+        try:
+            owner       = await client.get_users(Config.OWNER_ID)
+            owner_mention = f"@{owner.username}" if owner.username else str(Config.OWNER_ID)
+        except Exception:
+            owner_mention = str(Config.OWNER_ID)
+
+        expired_note = ""
+        if expiry_dt:
+            # They had premium but it lapsed
+            expired_str  = expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
+            expired_note = f"\n\n⚠️ Your last subscription expired on <code>{expired_str}</code>."
+
+        await message.reply_text(
+            f"🆓 <b>Your Plan: FREE</b>\n\n"
+            f"🎬 <b>Edits left today:</b> <code>{edits_left} / {Config.DAILY_FREE_LIMIT}</code>\n"
+            f"❌ 4K Beast Mode locked\n"
+            f"❌ Limited to {Config.DAILY_FREE_LIMIT} render(s) per day"
+            f"{expired_note}\n\n"
+            f"💎 <b>Upgrade to Premium</b> for unlimited edits + 4K!\n"
+            f"Contact: {owner_mention}",
+            parse_mode=enums.ParseMode.HTML,
+        )
+
