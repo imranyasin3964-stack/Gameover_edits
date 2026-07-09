@@ -2,7 +2,7 @@
 📖 GAMEOVER EDITS — /start, /help, /premium commands
 """
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
 from config import Config
@@ -103,7 +103,7 @@ def register(app: Client):
             f"{status_line}\n\n"
             f"Type /edit to begin! 🚀\n"
             f"Type /help for the full guide.",
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
         )
 
     @app.on_message(filters.command("help"))
@@ -117,7 +117,7 @@ def register(app: Client):
 
         await message.reply_text(
             HELP_TEXT.format(owner=owner_mention),
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
         )
 
     @app.on_message(filters.command("premium"))
@@ -130,5 +130,5 @@ def register(app: Client):
 
         await message.reply_text(
             PREMIUM_TEXT.format(owner_mention=owner_mention),
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
         )

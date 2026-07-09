@@ -5,7 +5,7 @@ Owner-only commands for managing premium users and viewing bot stats.
 
 import os
 import asyncio
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
 from config import Config
@@ -45,20 +45,20 @@ def register(app: Client):
     @app.on_message(filters.command("addpremium"))
     async def add_premium_cmd(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
-            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode="html")
+            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         if len(message.command) < 2:
             await message.reply_text(
                 "⚠️ <b>Usage:</b> <code>/addpremium &lt;user_id&gt;</code>",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
             return
 
         try:
             target_id = int(message.command[1])
         except ValueError:
-            await message.reply_text("❌ <b>Invalid user ID.</b>", parse_mode="html")
+            await message.reply_text("❌ <b>Invalid user ID.</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         added = add_premium(target_id, added_by=message.from_user.id)
@@ -67,7 +67,7 @@ def register(app: Client):
             await message.reply_text(
                 f"✅ <b>User <code>{target_id}</code> has been granted Premium!</b>\n"
                 f"💎 They now have unlimited renders and Beast Mode access.",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
             # Notify the user if possible
             try:
@@ -78,34 +78,34 @@ def register(app: Client):
                     "  ✅ Unlimited daily renders\n"
                     "  ✅ 4K 120 FPS Beast Mode unlocked 🔓\n\n"
                     "Type /edit to start your first premium render!",
-                    parse_mode="html"
+                    parse_mode=enums.ParseMode.HTML
                 )
             except Exception:
                 pass  # User may have not started the bot
         else:
             await message.reply_text(
                 f"⚠️ <b>User <code>{target_id}</code> is already Premium.</b>",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
 
     # ── /removepremium <user_id> ───────────────────────────────────────────────
     @app.on_message(filters.command("removepremium"))
     async def remove_premium_cmd(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
-            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode="html")
+            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         if len(message.command) < 2:
             await message.reply_text(
                 "⚠️ <b>Usage:</b> <code>/removepremium &lt;user_id&gt;</code>",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
             return
 
         try:
             target_id = int(message.command[1])
         except ValueError:
-            await message.reply_text("❌ <b>Invalid user ID.</b>", parse_mode="html")
+            await message.reply_text("❌ <b>Invalid user ID.</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         removed = remove_premium(target_id)
@@ -114,19 +114,19 @@ def register(app: Client):
             await message.reply_text(
                 f"✅ <b>Premium revoked from <code>{target_id}</code>.</b>\n"
                 f"They are now on the free plan (1 edit/day).",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
         else:
             await message.reply_text(
                 f"⚠️ <b>User <code>{target_id}</code> was not a Premium user.</b>",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
 
     # ── /listpremium ───────────────────────────────────────────────────────────
     @app.on_message(filters.command("listpremium"))
     async def list_premium_cmd(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
-            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode="html")
+            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         users = list_premium_users()
@@ -134,7 +134,7 @@ def register(app: Client):
             await message.reply_text(
                 "📋 <b>No premium users yet.</b>\n"
                 "Use <code>/addpremium &lt;user_id&gt;</code> to add one.",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
             return
 
@@ -142,21 +142,21 @@ def register(app: Client):
         await message.reply_text(
             f"💎 <b>Premium Users ({len(users)} total):</b>\n\n"
             + "\n".join(lines),
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
     # ── /addcredits <user_id> <amount> ──────────────────────────────────────────
     @app.on_message(filters.command("addcredits"))
     async def add_credits_cmd(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
-            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode="html")
+            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         if len(message.command) < 3:
             await message.reply_text(
                 "⚠️ <b>Usage:</b> <code>/addcredits &lt;user_id&gt; &lt;amount&gt;</code>\n"
                 "Example: <code>/addcredits 12345678 5</code>",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
             return
 
@@ -164,7 +164,7 @@ def register(app: Client):
             target_id = int(message.command[1])
             amount = int(message.command[2])
         except ValueError:
-            await message.reply_text("❌ <b>Invalid user ID or amount.</b>", parse_mode="html")
+            await message.reply_text("❌ <b>Invalid user ID or amount.</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         new_total = add_credits(target_id, amount)
@@ -172,7 +172,7 @@ def register(app: Client):
             f"✅ <b>Successfully updated credits for <code>{target_id}</code>!</b>\n"
             f"📊 <b>Change:</b> <code>{'+' if amount >= 0 else ''}{amount} credits</code>\n"
             f"💰 <b>New Balance:</b> <code>{new_total} credits</code>",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
         # Notify the user
         try:
@@ -181,7 +181,7 @@ def register(app: Client):
                 f"🎁 <b>You have received {amount} custom render credits from the Admin!</b>\n"
                 f"💰 <b>Current Balance:</b> <code>{new_total} credits</code>\n\n"
                 f"Type /edit to use your credits!",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
         except Exception:
             pass
@@ -190,12 +190,12 @@ def register(app: Client):
     @app.on_message(filters.command(["stats", "admin"]))
     async def stats_cmd(client: Client, message: Message):
         if not message.from_user or not _is_owner(message.from_user.id):
-            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode="html")
+            await message.reply_text("❌ <b>Owner only command!</b>", parse_mode=enums.ParseMode.HTML)
             return
 
         status_msg = await message.reply_text(
             "📊 <b>Fetching live system statistics...</b>",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
         # Run live update loop for 60 seconds (20 iterations of 3 seconds each)
@@ -238,7 +238,7 @@ def register(app: Client):
                     f"📋 <b>Jobs Waiting:</b> <code>{queue_size}</code>"
                 )
 
-                await status_msg.edit_text(caption, parse_mode="html")
+                await status_msg.edit_text(caption, parse_mode=enums.ParseMode.HTML)
                 await asyncio.sleep(2.0)  # Wait 2 seconds before next poll (total loop time = 3 seconds)
             except Exception as loop_err:
                 print(f"[Admin Loop Stats Error] {loop_err}")
@@ -248,7 +248,7 @@ def register(app: Client):
         try:
             await status_msg.edit_text(
                 status_msg.text.replace("Auto-refreshing live", "Live refresh paused (Type /admin to refresh again)"),
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
         except Exception:
             pass

@@ -11,7 +11,7 @@ import os
 import time
 import uuid
 import asyncio
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import (
     Message,
     CallbackQuery,
@@ -79,7 +79,7 @@ def register(app: Client):
             f"🎥 <b>2K 60fps</b>    — Ultra sharp, ~2-4 min render\n"
             f"💎 <b>4K 120fps</b>   — Beast Mode, ~5-12 min render\n\n"
             f"<i>After selecting, send the video you want to edit.</i>",
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
             reply_markup=_quality_keyboard(),
         )
 
@@ -126,7 +126,7 @@ def register(app: Client):
             f"<i>• Send a normal video (not a document)\n"
             f"• Max size: {Config.MAX_VIDEO_SIZE_MB} MB\n"
             f"• Your state expires in 10 minutes</i>",
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("❌ Cancel", callback_data="ge_cancel", style="danger")]
             ]),
@@ -141,7 +141,7 @@ def register(app: Client):
         await query.answer("Cancelled!")
         await query.message.edit_text(
             "❌ <b>Cancelled.</b> Type /edit to start again.",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
     # ── Video Message Handler ──────────────────────────────────────────────────
@@ -175,7 +175,7 @@ def register(app: Client):
                 f"❌ <b>File too large!</b>\n"
                 f"Max allowed: <code>{Config.MAX_VIDEO_SIZE_MB} MB</code>\n"
                 f"Your file: <code>{file_size_mb:.1f} MB</code>",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
             return
 
@@ -191,7 +191,7 @@ def register(app: Client):
             await message.reply_text(
                 "❌ <b>Daily limit reached!</b> You've used your free edit for today.\n"
                 "Type /premium to learn about unlimited access.",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
             return
 
@@ -213,7 +213,7 @@ def register(app: Client):
             f"<b>Est. Time:</b> <code>{profile['est_min']}</code>\n"
             f"<b>File Size:</b> <code>{file_size_mb:.1f} MB</code>"
             f"{wait_note}",
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
         )
 
         job_id = uuid.uuid4().hex[:8]
@@ -306,7 +306,7 @@ def register(app: Client):
                     chat_id=chat_id,
                     document=output_path,
                     caption=caption,
-                    parse_mode="html",
+                    parse_mode=enums.ParseMode.HTML,
                     force_document=True,  # Never compress as video
                 )
 
@@ -335,7 +335,7 @@ def register(app: Client):
                         f"📊 <b>Credits:</b> <code>{remaining_str}</code>\n\n"
                         f"Type /edit to make another render!"
                     ),
-                    parse_mode="html",
+                    parse_mode=enums.ParseMode.HTML,
                 )
 
             except Exception as e:
@@ -375,6 +375,6 @@ def register(app: Client):
 async def _safe_edit(message: Message, text: str):
     """Edit a message safely, ignoring any Telegram API errors."""
     try:
-        await message.edit_text(text, parse_mode="html")
+        await message.edit_text(text, parse_mode=enums.ParseMode.HTML)
     except Exception:
         pass
