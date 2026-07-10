@@ -289,16 +289,36 @@ def register(app: Client):
             reply_markup=ReplyKeyboardRemove(),
         )
 
-        # ── CRITICAL: Lock in BOTH IDs as plain integers RIGHT NOW ─────────────
-        # These are captured by the do_render closure below.  We extract them
-        # here — before any other await — so the closure NEVER accidentally
-        # picks up the incoming video message's chat/message ID.
+        # ── CRITICAL: Lock in BOTH IDs as plain integers AND create a bound ─────
+        # edit function that uses the Message object's own peer info.
+        # status_msg.edit_text() bypasses Pyrogram peer-cache lookup entirely.
         status_chat_id = status_msg.chat.id   # integer, immutable
         status_msg_id  = status_msg.id         # integer, immutable
+        print(
+            f"[Edit Plugin] 📌 STATUS MSG LOCKED — "
+            f"chat_id={status_chat_id}  msg_id={status_msg_id}  "
+            f"job will use status_msg.edit_text() directly"
+        )
 
-        job_id = uuid.uuid4().hex[:8]
-        # chat_id for sending the finished document / done message
-        chat_id = status_chat_id
+        # Bound edit coroutine — closes over status_msg (Message object).
+        # Uses status_msg.edit_text() which resolves the peer internally,
+        # so it is IMMUNE to Pyrogram session-cache issues.
+        async def _edit(text: str) -> None:
+            """Safe in-place edit of the status message. Never raises."""
+            try:
+                await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML)
+            except Exception as exc:
+                import sys
+                err = str(exc)
+                if "MESSAGE_NOT_MODIFIED" not in err:
+                    print(
+                        f"[Edit] ⚠ edit failed "
+                        f"(chat={status_chat_id} msg={status_msg_id}): {exc}",
+                        file=sys.stderr
+                    )
+
+        job_id  = uuid.uuid4().hex[:8]
+        chat_id = status_chat_id   # used for send_document / send_message
 
         async def do_render():
             input_path  = None
@@ -309,28 +329,23 @@ def register(app: Client):
                 empty  = length - filled
                 return f"{'▰' * filled}{'▱' * empty}"
 
-            # status_chat_id and status_msg_id are already bound integers
-            # from the outer scope — do NOT reassign them here.
+            last_edit_time = [time.time()]
 
             try:
                 # ── Step 1: Download ───────────────────────────────────────────
-                ext         = ".mp4"
-                input_path  = os.path.join(INPUT_DIR, f"ge_in_{job_id}{ext}")
-                dl_start    = time.time()
-                last_edit_time = [time.time()]
+                ext        = ".mp4"
+                input_path = os.path.join(INPUT_DIR, f"ge_in_{job_id}{ext}")
 
                 async def dl_progress(current, total):
                     now = time.time()
                     if now - last_edit_time[0] < 3.0:
                         return
                     last_edit_time[0] = now
-
                     cur_mb = current / (1024 * 1024)
                     tot_mb = total / (1024 * 1024)
-                    pct = (current / total) * 100 if total > 0 else 0
-                    bar = _make_progress_bar_chars(pct, 10)
-                    await _safe_edit(
-                        client, status_chat_id, status_msg_id,
+                    pct    = (current / total) * 100 if total > 0 else 0
+                    bar    = _make_progress_bar_chars(pct, 10)
+                    await _edit(
                         f"📥 <b>DOWNLOADING YOUR VIDEO...</b>\n\n"
                         f"Progress: {bar} {pct:.0f}%\n"
                         f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
@@ -339,15 +354,12 @@ def register(app: Client):
                 await client.download_media(message, file_name=input_path, progress=dl_progress)
 
                 if not os.path.exists(input_path) or os.path.getsize(input_path) < 1000:
-                    await _safe_edit(client, status_chat_id, status_msg_id, "❌ <b>Download failed. Please try again.</b>")
+                    await _edit("❌ <b>Download failed. Please try again.</b>")
                     return
 
                 # ── Step 2: Render ─────────────────────────────────────────────
-                render_start = time.time()
-                
-                # Initial render screen
                 initial_bar = _make_progress_bar_chars(0.0, 10)
-                initial_text = (
+                await _edit(
                     f"⚙️ <b>GAMEOVER ENGINE RUNNING...</b>\n\n"
                     f"Quality: {profile['label']}\n"
                     f"Progress: {initial_bar} 0%\n"
@@ -356,22 +368,19 @@ def register(app: Client):
                     f"⏱ Elapsed: <code>0s</code>\n"
                     f"⏳ ETA: <code>Calculating...</code>"
                 )
-                await _safe_edit(client, status_chat_id, status_msg_id, initial_text)
 
                 async def progress_cb(info: dict):
                     now = time.time()
                     if now - last_edit_time[0] < 3.0:
                         return
                     last_edit_time[0] = now
-
                     pct     = info["pct"]
                     speed   = info.get("speed", "1.0x")
                     eta     = info["eta"]
                     elapsed = info.get("elapsed", "0s")
                     size_mb = info.get("size_mb", 0.0)
                     bar     = _make_progress_bar_chars(pct, 10)
-                    
-                    text = (
+                    await _edit(
                         f"⚙️ <b>GAMEOVER ENGINE RUNNING...</b>\n\n"
                         f"Quality: {profile['label']}\n"
                         f"Progress: {bar} {pct:.0f}%\n"
@@ -380,9 +389,8 @@ def register(app: Client):
                         f"⏱ Elapsed: <code>{elapsed}</code>\n"
                         f"⏳ ETA: <code>{eta}</code>"
                     )
-                    await _safe_edit(client, status_chat_id, status_msg_id, text)
 
-                show_wm = not has_watermark_disabled(user.id)
+                show_wm     = not has_watermark_disabled(user.id)
                 output_path = await render_video(
                     input_path=input_path,
                     quality_key=quality,
@@ -392,7 +400,7 @@ def register(app: Client):
                 )
 
                 if not output_path:
-                    await _safe_edit(client, status_chat_id, status_msg_id,
+                    await _edit(
                         "❌ <b>Render failed!</b>\n"
                         "FFmpeg encountered an error. Please try again."
                     )
@@ -406,17 +414,15 @@ def register(app: Client):
                     if now - last_edit_time[0] < 3.0:
                         return
                     last_edit_time[0] = now
-
                     cur_mb = current / (1024 * 1024)
                     tot_mb = total / (1024 * 1024)
-                    pct = (current / total) * 100 if total > 0 else 0
-                    bar = _make_progress_bar_chars(pct, 10)
-                    text = (
+                    pct    = (current / total) * 100 if total > 0 else 0
+                    bar    = _make_progress_bar_chars(pct, 10)
+                    await _edit(
                         f"📤 <b>UPLOADING YOUR VIDEO...</b>\n\n"
                         f"Progress: {bar} {pct:.0f}%\n"
                         f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
                     )
-                    await _safe_edit(client, status_chat_id, status_msg_id, text)
 
                 caption = (
                     f"🎬 <b>GAMEOVER EDITS</b>\n\n"
@@ -431,11 +437,10 @@ def register(app: Client):
                     document=output_path,
                     caption=caption,
                     parse_mode=enums.ParseMode.HTML,
-                    force_document=True,  # Never compress as video
+                    force_document=True,
                     progress=ul_progress,
                 )
 
-                # Record the edit in DB
                 record_edit(user.id)
 
                 remaining_after = get_remaining_edits(user.id, Config.DAILY_FREE_LIMIT)
@@ -446,9 +451,11 @@ def register(app: Client):
                 else:
                     remaining_str = f"{remaining_after} edit(s) left today"
 
-                # Delete the status message and send a clean done message
+                # Delete the progress message, send a clean done message
                 try:
-                    await client.delete_messages(chat_id=status_chat_id, message_ids=status_msg_id)
+                    await client.delete_messages(
+                        chat_id=status_chat_id, message_ids=status_msg_id
+                    )
                 except Exception:
                     pass
 
@@ -467,10 +474,9 @@ def register(app: Client):
                 import traceback
                 traceback.print_exc()
                 print(f"[Edit Plugin] ❌ Job {job_id} error: {e}")
-                await _safe_edit(client, status_chat_id, status_msg_id, f"❌ <b>An unexpected error occurred:</b>\n<code>{e}</code>")
+                await _edit(f"❌ <b>An unexpected error occurred:</b>\n<code>{e}</code>")
 
             finally:
-                # Always clean up temp files
                 for path in [input_path, output_path]:
                     if path and os.path.exists(path):
                         try:
@@ -486,7 +492,7 @@ def register(app: Client):
         )
 
         if pos > 1:
-            await _safe_edit(client, message.chat.id, status_msg.id,
+            await _edit(
                 f"📋 <b>Added to queue!</b>\n\n"
                 f"🆔 <b>Job ID:</b> <code>{job_id}</code>\n"
                 f"🎬 <b>Quality:</b> {profile['label']}\n"
