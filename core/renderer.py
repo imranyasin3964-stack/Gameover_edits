@@ -172,17 +172,13 @@ def _escape_wm(text: str) -> str:
             .replace(":",  "\\:"))
 
 
-def _drawtext(wm: str, font_opt: str) -> str:
+def _drawtext(wm: str, font_opt: str, fontsize: int, padding: int, shadow: int) -> str:
     return (
-        f"drawtext=text='{wm}':fontsize=32:fontcolor=white@0.5{font_opt}"
-        f":x=w-tw-24:y=h-th-24:shadowx=2:shadowy=2:shadowcolor=black@0.6"
+        f"drawtext=text='{wm}':fontsize={fontsize}:fontcolor=white@0.65{font_opt}"
+        f":x=w-tw-{padding}:y=h-th-{padding}:shadowx={shadow}:shadowy={shadow}:shadowcolor=black@0.9"
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TIER 1 — 1080p FAST MODE
-# Goal: ~5 minutes. Standard bicubic upscale, basic color grade.
-# ─────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
 # TIER 1 — 1080p FAST MODE
 # Goal: ~5 minutes. Standard Lanczos scale, basic color grade, 60fps optical flow.
@@ -206,7 +202,7 @@ def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
         "curves=preset=strong_contrast",
         "eq=contrast=1.12:saturation=1.35:gamma=0.96",
         "unsharp=lx=3:ly=3:la=0.4:cx=3:cy=3:ca=0.15",
-        _drawtext(wm, font_opt),
+        _drawtext(wm, font_opt, fontsize=40, padding=20, shadow=2),
         "format=yuv420p",
     ]
     return ",".join(filters)
@@ -235,7 +231,7 @@ def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
         "curves=r='0/0 0.05/0.02 0.5/0.48 0.95/0.98 1/1':g='0/0 0.05/0.02 0.5/0.46 0.95/0.97 1/1':b='0/0 0.05/0.02 0.5/0.45 0.95/0.96 1/1'",
         "eq=contrast=1.2:saturation=1.5:gamma=0.9",
         "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.25",
-        _drawtext(wm, font_opt),
+        _drawtext(wm, font_opt, fontsize=60, padding=30, shadow=3),
         "format=yuv420p",
     ]
     return ",".join(filters)
@@ -278,7 +274,7 @@ def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
         eq,
         unsharp,
         minterpolate,
-        _drawtext(wm, font_opt),
+        _drawtext(wm, font_opt, fontsize=80, padding=40, shadow=4),
         "format=yuv420p",
     ]
     return ",".join(filters)
