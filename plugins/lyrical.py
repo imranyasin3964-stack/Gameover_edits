@@ -150,6 +150,16 @@ def register(app: Client):
             try:
                 await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML)
             except Exception as exc:
+                err = str(exc)
+                if "MESSAGE_ID_INVALID" in err:
+                    try:
+                        # Refresh peer cache in Pyrogram SQLite session database
+                        await client.get_chat(status_chat_id)
+                        await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML)
+                        return
+                    except Exception as retry_exc:
+                        exc = retry_exc
+                
                 import sys
                 err = str(exc)
                 if "MESSAGE_NOT_MODIFIED" not in err:
