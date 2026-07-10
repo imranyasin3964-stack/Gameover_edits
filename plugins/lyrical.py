@@ -32,22 +32,6 @@ def _make_progress_bar_chars(pct: float, length: int = 10) -> str:
     return f"{'▰' * filled}{'▱' * empty}"
 
 
-async def _edit_status(client: Client, chat_id: int, msg_id: int, text: str):
-    """Safe wrapper around edit_message_text that silently ignores stale-message errors."""
-    try:
-        await client.edit_message_text(
-            chat_id=chat_id,
-            message_id=msg_id,
-            text=text,
-            parse_mode=enums.ParseMode.HTML
-        )
-    except Exception as e:
-        # Silently ignore MESSAGE_ID_INVALID and FloodWait; log everything else
-        err = str(e)
-        if "MESSAGE_ID_INVALID" not in err and "MESSAGE_NOT_MODIFIED" not in err:
-            print(f"[Lyrical Plugin] Edit warning: {e}")
-
-
 def register(app: Client):
 
     @app.on_message(filters.command(["lyrics", "lyrical"]) & filters.private)
@@ -158,9 +142,22 @@ def register(app: Client):
             parse_mode=enums.ParseMode.HTML,
             reply_markup=ReplyKeyboardRemove()
         )
-        # Store both chat_id and msg_id at the top level for every helper below
         status_chat_id = status_msg.chat.id
         status_msg_id  = status_msg.id
+
+        # Bound edit helper to bypass peer-lookup issues by using status_msg.edit_text directly
+        async def _edit(text: str) -> None:
+            try:
+                await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML)
+            except Exception as exc:
+                import sys
+                err = str(exc)
+                if "MESSAGE_NOT_MODIFIED" not in err:
+                    print(
+                        f"[Lyrical Edit] ⚠ edit failed "
+                        f"(chat={status_chat_id} msg={status_msg_id}): {exc}",
+                        file=sys.stderr
+                    )
 
         raw_video_path  = None
         input_audio_path = None
@@ -195,8 +192,7 @@ def register(app: Client):
                 pct    = (current / total) * 100 if total > 0 else 0
                 bar    = _make_progress_bar_chars(pct, 10)
                 label  = "VIDEO" if is_video else "AUDIO"
-                await _edit_status(
-                    client, status_chat_id, status_msg_id,
+                await _edit(
                     f"📥 <b>DOWNLOADING {label} TRACK...</b>\n\n"
                     f"Progress: {bar} {pct:.0f}%\n"
                     f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
@@ -210,10 +206,7 @@ def register(app: Client):
             # ── Step 2: Extract audio if video was sent ───────────────────────
             if is_video:
                 raw_video_path = download_target_path
-                await _edit_status(
-                    client, status_chat_id, status_msg_id,
-                    "🔊 <b>EXTRACTING AUDIO STREAM FROM VIDEO...</b>\n\n<i>Please wait...</i>"
-                )
+                await _edit("🔊 <b>EXTRACTING AUDIO STREAM FROM VIDEO...</b>\n\n<i>Please wait...</i>")
                 extract_ok = await extract_audio_from_video(raw_video_path, input_audio_path)
                 if not extract_ok:
                     raise ValueError("Could not extract audio track from video.")
@@ -225,8 +218,7 @@ def register(app: Client):
                 raise ValueError("Could not determine audio duration.")
 
             # ── Step 3: Lofi Reverb Filtering ─────────────────────────────────
-            await _edit_status(
-                client, status_chat_id, status_msg_id,
+            await _edit(
                 "🎸 <b>APPLYING SLOWED &amp; REVERB FILTERS...</b>\n\n"
                 "<i>This lowers pitch and adds depth. Please wait...</i>"
             )
@@ -238,8 +230,7 @@ def register(app: Client):
             video_duration = duration / 0.85
 
             # ── Step 4: Whisper AI Transcription ──────────────────────────────
-            await _edit_status(
-                client, status_chat_id, status_msg_id,
+            await _edit(
                 "🤖 <b>WHISPER AI GENERATING LYRICS...</b>\n\n"
                 "<i>Transcribing timestamps. This takes a few moments...</i>"
             )
@@ -251,8 +242,7 @@ def register(app: Client):
                 raise ValueError("Whisper transcription failed.")
 
             # ── Step 5: Render Subtitled Video ────────────────────────────────
-            await _edit_status(
-                client, status_chat_id, status_msg_id,
+            await _edit(
                 f"⚙️ <b>GAMEOVER ENGINE RENDER...</b>\n\n"
                 f"Progress: {_make_progress_bar_chars(0, 10)} 0%\n"
                 f"⏱ Elapsed: <code>0s</code>\n"
@@ -266,8 +256,7 @@ def register(app: Client):
                 last_edit_time[0] = now
                 pct  = info["pct"]
                 bar  = _make_progress_bar_chars(pct, 10)
-                await _edit_status(
-                    client, status_chat_id, status_msg_id,
+                await _edit(
                     f"⚙️ <b>GAMEOVER ENGINE RENDER...</b>\n\n"
                     f"Progress: {bar} {pct:.0f}%\n"
                     f"⏱ Elapsed: <code>{info['elapsed']}</code>\n"
@@ -295,8 +284,7 @@ def register(app: Client):
                 tot_mb = total / (1024 * 1024)
                 pct    = (current / total) * 100 if total > 0 else 0
                 bar    = _make_progress_bar_chars(pct, 10)
-                await _edit_status(
-                    client, status_chat_id, status_msg_id,
+                await _edit(
                     f"📤 <b>UPLOADING LYRICAL VIDEO...</b>\n\n"
                     f"Progress: {bar} {pct:.0f}%\n"
                     f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
@@ -349,8 +337,7 @@ def register(app: Client):
             if has_deducted:
                 add_credits(user.id, 1)
 
-            await _edit_status(
-                client, status_chat_id, status_msg_id,
+            await _edit(
                 f"❌ <b>Process Failed!</b>\n\n"
                 f"Reason: <code>{str(e)}</code>\n\n"
                 f"<i>Your credit has been refunded. Please try with another file.</i>"
