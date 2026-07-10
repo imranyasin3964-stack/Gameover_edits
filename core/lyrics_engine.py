@@ -146,37 +146,49 @@ async def render_lyrical_video(
     progress_callback: Optional[Callable[[dict], Awaitable[None]]] = None
 ) -> bool:
     """
-    Render 1080p aesthetic dark background video, burning subtitles and watermark.
+    Render 1080p premium aesthetic video, burning centered subtitles and watermark.
 
     Command structure (safe & portable):
       ffmpeg -y
-        -f lavfi -i color=c=0x0a0f18:s=1920x1080:d={duration}   (video canvas)
-        -i {audio_path}                                           (audio track)
-        -vf "vignette=0.5, subtitles=..., drawtext=..."          (all filters via -vf)
+        -f lavfi -i "color=c=0x0a192f:s=1920x1080:d={duration},
+                     geq=r='...':g='...':b='...'"   (premium dark gradient canvas)
+        -i {audio_path}                              (lofi audio track)
+        -vf "subtitles=...:Alignment=5, drawtext=..." (centered subtitles + watermark)
         -c:v libx264 -preset medium -crf 18
         -c:a aac -b:a 192k -shortest
         output.mp4
+
+    Background: dark navy → teal gradient via geq (Spotify/CapCut aesthetic).
+    Subtitles:  dead-center screen (ASS Alignment=5 = MiddleCenter), Arial 34pt.
     """
     escaped_srt = _escape_srt_path(srt_path)
 
-    # Subtitles style: system-default font (let libass choose), bold, size 30, white, thick outline + shadow, centered
+    # ── Subtitles: dead-center (Alignment=5 = ASS Middle-Center) ─────────────
+    # Fontsize 34, thick outline, drop shadow, white text — premium Spotify look
     subtitles_filter = (
         f"subtitles='{escaped_srt}':force_style='"
-        f"Fontsize=30,PrimaryColour=&H00FFFFFF,"
-        f"OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2'"
+        f"Fontname=Arial,Fontsize=34,PrimaryColour=&H00FFFFFF,"
+        f"OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=2,Alignment=5'"
     )
 
-    # Watermark in bottom-right corner
+    # ── Watermark: bottom-right corner ───────────────────────────────────────
     watermark_filter = (
         f"drawtext=text='{watermark_text}':fontsize=40:fontcolor=white@0.65"
         f":x=w-tw-20:y=h-th-20:shadowx=2:shadowy=2:shadowcolor=black@0.9"
     )
 
-    # Full video filter chain via -vf (NOT inside lavfi -i)
-    vf_chain = f"vignette=0.5,{subtitles_filter},{watermark_filter}"
+    # ── Background canvas: dark blue/teal premium gradient via geq ───────────
+    # geq shifts each pixel's RGB based on its X/Y position to produce a
+    # subtle horizontal/vertical gradient (dark navy → deep teal undertone).
+    # The result looks like a Spotify / CapCut aesthetic background.
+    canvas_input = (
+        f"color=c=0x0a192f:s=1920x1080:d={duration},"
+        f"geq=r='clip(10+X/W*15\,0\,255)':g='clip(25+Y/H*25\,0\,255)':b='clip(47+X/W*20\,0\,255)'"
+    )
 
-    # Canvas input: pure lavfi color source
-    canvas_input = f"color=c=0x0a0f18:s=1920x1080:d={duration}"
+    # ── Full video filter chain via -vf ──────────────────────────────────────
+    # Note: vignette removed — the gradient provides sufficient depth/darkness
+    vf_chain = f"{subtitles_filter},{watermark_filter}"
 
     cmd = [
         "ffmpeg", "-y",
