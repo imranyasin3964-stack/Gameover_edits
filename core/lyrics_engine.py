@@ -125,13 +125,17 @@ def transcribe_audio_to_srt(audio_path: str, srt_path: str) -> bool:
         result = model.transcribe(audio_path)
 
         with open(srt_path, "w", encoding="utf-8") as f:
-            for idx, seg in enumerate(result.get("segments", []), start=1):
+            segments = result.get("segments", [])
+            if not segments:
+                print("[Lyrics Engine] ℹ No speech segments detected by Whisper AI.")
+            for idx, seg in enumerate(segments, start=1):
                 start_str = _format_srt_time(seg["start"])
                 end_str = _format_srt_time(seg["end"])
                 text = seg["text"].strip()
                 f.write(f"{idx}\n{start_str} --> {end_str}\n{text}\n\n")
 
-        return os.path.exists(srt_path) and os.path.getsize(srt_path) > 0
+        # Return True as long as the file is successfully created
+        return os.path.exists(srt_path)
     except Exception as e:
         print(f"[Lyrics Engine] Whisper transcription failed: {e}")
         return False
@@ -163,6 +167,9 @@ async def render_lyrical_video(
     """
     escaped_srt = _escape_srt_path(srt_path)
 
+    # Check if we have actual subtitle lines to burn in
+    has_subtitles = os.path.exists(srt_path) and os.path.getsize(srt_path) > 10
+
     # ── Subtitles: dead-center (Alignment=5 = ASS Middle-Center) ─────────────
     # Fontsize 34, thick outline, drop shadow, white text — premium Spotify look
     subtitles_filter = (
@@ -187,8 +194,11 @@ async def render_lyrical_video(
     )
 
     # ── Full video filter chain via -vf ──────────────────────────────────────
-    # Note: vignette removed — the gradient provides sufficient depth/darkness
-    vf_chain = f"{subtitles_filter},{watermark_filter}"
+    if has_subtitles:
+        vf_chain = f"{subtitles_filter},{watermark_filter}"
+    else:
+        print("[Lyrics Engine] ℹ SRT file is empty. Rendering background lofi video without subtitles.")
+        vf_chain = watermark_filter
 
     cmd = [
         "ffmpeg", "-y",
