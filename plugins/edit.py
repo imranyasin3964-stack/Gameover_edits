@@ -306,6 +306,12 @@ def register(app: Client):
 
         async def _edit(text: str) -> None:
             """Bound edit: uses status_msg.edit_text() to bypass peer cache."""
+            # Print a clean, plain-text log to the VPS console for easy monitoring
+            clean_log = text.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "").replace("<i>", "").replace("</i>", "")
+            # Replace multiple newlines with a single space/newline for log readability
+            clean_log = " | ".join(line.strip() for line in clean_log.split("\n") if line.strip())
+            print(f"[Progress Log] ⚡ {clean_log}")
+
             try:
                 await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML)
             except Exception as exc:
