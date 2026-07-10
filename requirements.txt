@@ -16,3 +16,7 @@ asyncio-throttle==1.0.2
 
 # System resource stats
 psutil==5.9.8
+
+# AI Audio transcription (Whisper)
+openai-whisper
+

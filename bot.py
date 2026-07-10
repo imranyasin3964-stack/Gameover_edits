@@ -54,6 +54,7 @@ PLUGINS = [
     "plugins.help",
     "plugins.admin",
     "plugins.edit",
+    "plugins.lyrical",
 ]
 
 
@@ -63,6 +64,7 @@ async def set_bot_commands(app: Client):
         await asyncio.wait_for(app.set_bot_commands([
             BotCommand("start",   "🎬 Welcome message & your status"),
             BotCommand("edit",    "🎥 Open quality menu and start editing"),
+            BotCommand("lyrics",  "🎵 Generate automated lyrical lofi status"),
             BotCommand("help",    "📖 Show full usage guide"),
             BotCommand("premium", "💎 View premium plans"),
         ]), timeout=10)
