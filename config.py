@@ -42,6 +42,22 @@ class Config:
     # Font file for watermark. If None, FFmpeg default font is used.
     WATERMARK_FONT: str = os.getenv("WATERMARK_FONT", "")
 
+    # ── Google Drive (Phase 1 — Drive Bridge) ─────────────────────────────────
+    # Path to the Service Account credentials JSON file (headless auth, no browser).
+    DRIVE_CREDENTIALS_PATH: str = os.getenv("DRIVE_CREDENTIALS_PATH", "credentials.json")
+
+    # Google Drive Folder IDs — get these from the Drive folder URL:
+    #   https://drive.google.com/drive/folders/<THIS_IS_THE_FOLDER_ID>
+    DRIVE_INPUT_FOLDER_ID: str  = os.getenv("DRIVE_INPUT_FOLDER_ID", "")
+    DRIVE_OUTPUT_FOLDER_ID: str = os.getenv("DRIVE_OUTPUT_FOLDER_ID", "")
+
+    # Polling: how often (seconds) the bot checks OUTPUT_VIDEOS for a finished job.
+    DRIVE_POLL_INTERVAL_SEC: int = int(os.getenv("DRIVE_POLL_INTERVAL_SEC", "15"))
+
+    # Polling: maximum total wait time (seconds) before declaring a timeout.
+    # Default: 2700 = 45 minutes. Increase if your Colab jobs take longer.
+    DRIVE_POLL_TIMEOUT_SEC: int  = int(os.getenv("DRIVE_POLL_TIMEOUT_SEC", "2700"))
+
     @staticmethod
     def validate():
         """Check that all required env vars are set before bot starts."""
@@ -61,3 +77,15 @@ class Config:
                 + "\n".join(f"  - {m}" for m in missing)
                 + "\n\nPehle .env fill karo phir bot chalao!\n"
             )
+
+    @staticmethod
+    def drive_configured() -> bool:
+        """
+        Returns True if all required Google Drive env vars are set.
+        Used by plugins to decide whether to use Drive mode or fall back to local render.
+        """
+        return bool(
+            Config.DRIVE_INPUT_FOLDER_ID
+            and Config.DRIVE_OUTPUT_FOLDER_ID
+            and os.path.isfile(Config.DRIVE_CREDENTIALS_PATH)
+        )

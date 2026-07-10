@@ -3,6 +3,7 @@
 *.session
 *.session-journal
 gameedit.db
+credentials.json          # Google Service Account key — NEVER commit this!
 
 # ── Temp/output files ──────────────────────────────────────────────────────────
 downloads/
