@@ -183,7 +183,7 @@ async def render_lyrical_video(
     # The result looks like a Spotify / CapCut aesthetic background.
     canvas_input = (
         f"color=c=0x0a192f:s=1920x1080:d={duration},"
-        f"geq=r='clip(10+X/W*15\,0\,255)':g='clip(25+Y/H*25\,0\,255)':b='clip(47+X/W*20\,0\,255)'"
+        rf"geq=r='clip(10+X/W*15\,0\,255)':g='clip(25+Y/H*25\,0\,255)':b='clip(47+X/W*20\,0\,255)'"
     )
 
     # ── Full video filter chain via -vf ──────────────────────────────────────
