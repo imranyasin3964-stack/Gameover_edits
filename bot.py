@@ -122,8 +122,14 @@ async def main():
         asyncio.create_task(set_bot_commands(app))
 
         # Keep running
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            pass
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[Bot] 🛑 Bot stopped gracefully.")
