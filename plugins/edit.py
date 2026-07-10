@@ -290,7 +290,7 @@ def register(app: Client):
             def _make_progress_bar_chars(pct: float, length: int = 10) -> str:
                 filled = int(round(pct / 100 * length))
                 empty  = length - filled
-                return f"{'█' * filled}{'░' * empty}"
+                return f"{'▰' * filled}{'▱' * empty}"
 
             status_msg_id = status_msg.id
 
@@ -313,7 +313,7 @@ def register(app: Client):
                     bar = _make_progress_bar_chars(pct, 10)
                     text = (
                         f"📥 <b>DOWNLOADING YOUR VIDEO...</b>\n\n"
-                        f"Progress: [<code>{bar}</code>] {pct:.0f}%\n"
+                        f"Progress: {bar} {pct:.0f}%\n"
                         f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
                     )
                     await _safe_edit(client, chat_id, status_msg_id, text)
@@ -332,7 +332,7 @@ def register(app: Client):
                 initial_text = (
                     f"⚙️ <b>GAMEOVER ENGINE RUNNING...</b>\n\n"
                     f"Quality: {profile['label']}\n"
-                    f"Progress: [<code>{initial_bar}</code>] 0%\n"
+                    f"Progress: {initial_bar} 0%\n"
                     f"📦 Size: <code>0.0 MB</code>\n"
                     f"⚡ Speed: <code>0.0x</code>\n"
                     f"⏱ Elapsed: <code>0s</code>\n"
@@ -356,7 +356,7 @@ def register(app: Client):
                     text = (
                         f"⚙️ <b>GAMEOVER ENGINE RUNNING...</b>\n\n"
                         f"Quality: {profile['label']}\n"
-                        f"Progress: [<code>{bar}</code>] {pct:.0f}%\n"
+                        f"Progress: {bar} {pct:.0f}%\n"
                         f"📦 Size: <code>{size_mb:.1f} MB</code>\n"
                         f"⚡ Speed: <code>{speed}</code>\n"
                         f"⏱ Elapsed: <code>{elapsed}</code>\n"
@@ -393,7 +393,7 @@ def register(app: Client):
                     bar = _make_progress_bar_chars(pct, 10)
                     text = (
                         f"📤 <b>UPLOADING YOUR VIDEO...</b>\n\n"
-                        f"Progress: [<code>{bar}</code>] {pct:.0f}%\n"
+                        f"Progress: {bar} {pct:.0f}%\n"
                         f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
                     )
                     await _safe_edit(client, chat_id, status_msg_id, text)
