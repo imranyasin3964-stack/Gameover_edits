@@ -287,38 +287,21 @@ def register(app: Client):
             input_path  = None
             output_path = None
 
-            def _make_progress_bar_chars(pct: float, length: int = 15) -> str:
+            def _make_progress_bar_chars(pct: float, length: int = 10) -> str:
                 filled = int(round(pct / 100 * length))
                 empty  = length - filled
-                return f"{'▰' * filled}{'▱' * empty}"
+                return f"{'█' * filled}{'░' * empty}"
 
-            # Terminal variables
-            dl_status     = "Waiting..."
-            render_status = "Waiting..."
-            ul_status     = "Waiting..."
-
-            def build_terminal_text():
-                return (
-                    f"🖥️ <b>GAMEOVER EDITS TERMINAL</b>\n\n"
-                    f"<code>"
-                    f"📥 Downloading: {dl_status}\n"
-                    f"⚙️ Rendering:   {render_status}\n"
-                    f"📤 Uploading:   {ul_status}"
-                    f"</code>"
-                )
+            status_msg_id = status_msg.id
 
             try:
                 # ── Step 1: Download ───────────────────────────────────────────
-                dl_status = "0.0 MB / 0.0 MB (0%)\n[▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱]"
-                await _safe_edit(status_msg, build_terminal_text())
-
                 ext         = ".mp4"
                 input_path  = os.path.join(INPUT_DIR, f"ge_in_{job_id}{ext}")
                 dl_start    = time.time()
                 last_edit_time = [time.time()]
 
                 async def dl_progress(current, total):
-                    nonlocal dl_status
                     now = time.time()
                     if now - last_edit_time[0] < 3.0:
                         return
@@ -327,39 +310,59 @@ def register(app: Client):
                     cur_mb = current / (1024 * 1024)
                     tot_mb = total / (1024 * 1024)
                     pct = (current / total) * 100 if total > 0 else 0
-                    bar = _make_progress_bar_chars(pct, 15)
-                    dl_status = f"{cur_mb:.1f} MB / {tot_mb:.1f} MB ({pct:.1f}%)\n[{bar}]"
-                    await _safe_edit(status_msg, build_terminal_text())
+                    bar = _make_progress_bar_chars(pct, 10)
+                    text = (
+                        f"📥 <b>DOWNLOADING YOUR VIDEO...</b>\n\n"
+                        f"Progress: [<code>{bar}</code>] {pct:.0f}%\n"
+                        f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
+                    )
+                    await _safe_edit(client, chat_id, status_msg_id, text)
 
                 await client.download_media(message, file_name=input_path, progress=dl_progress)
 
                 if not os.path.exists(input_path) or os.path.getsize(input_path) < 1000:
-                    await _safe_edit(status_msg, "❌ <b>Download failed. Please try again.</b>")
+                    await _safe_edit(client, chat_id, status_msg_id, "❌ <b>Download failed. Please try again.</b>")
                     return
-
-                dl_time = time.time() - dl_start
-                in_size = os.path.getsize(input_path) / (1024 * 1024)
-                dl_status = f"Done! [{in_size:.1f} MB in {dl_time:.0f}s]"
-                await _safe_edit(status_msg, build_terminal_text())
 
                 # ── Step 2: Render ─────────────────────────────────────────────
                 render_start = time.time()
-                render_status = "Starting..."
-                await _safe_edit(status_msg, build_terminal_text())
+                
+                # Initial render screen
+                initial_bar = _make_progress_bar_chars(0.0, 10)
+                initial_text = (
+                    f"⚙️ <b>GAMEOVER ENGINE RUNNING...</b>\n\n"
+                    f"Quality: {profile['label']}\n"
+                    f"Progress: [<code>{initial_bar}</code>] 0%\n"
+                    f"📦 Size: <code>0.0 MB</code>\n"
+                    f"⚡ Speed: <code>0.0x</code>\n"
+                    f"⏱ Elapsed: <code>0s</code>\n"
+                    f"⏳ ETA: <code>Calculating...</code>"
+                )
+                await _safe_edit(client, chat_id, status_msg_id, initial_text)
 
                 async def progress_cb(info: dict):
-                    nonlocal render_status
                     now = time.time()
                     if now - last_edit_time[0] < 3.0:
                         return
                     last_edit_time[0] = now
 
-                    pct   = info["pct"]
-                    speed = info.get("speed", "1.0x")
-                    eta   = info["eta"]
-                    bar   = _make_progress_bar_chars(pct, 15)
-                    render_status = f"{pct:.1f}% | Speed: {speed} | ETA: {eta}\n[{bar}]"
-                    await _safe_edit(status_msg, build_terminal_text())
+                    pct     = info["pct"]
+                    speed   = info.get("speed", "1.0x")
+                    eta     = info["eta"]
+                    elapsed = info.get("elapsed", "0s")
+                    size_mb = info.get("size_mb", 0.0)
+                    bar     = _make_progress_bar_chars(pct, 10)
+                    
+                    text = (
+                        f"⚙️ <b>GAMEOVER ENGINE RUNNING...</b>\n\n"
+                        f"Quality: {profile['label']}\n"
+                        f"Progress: [<code>{bar}</code>] {pct:.0f}%\n"
+                        f"📦 Size: <code>{size_mb:.1f} MB</code>\n"
+                        f"⚡ Speed: <code>{speed}</code>\n"
+                        f"⏱ Elapsed: <code>{elapsed}</code>\n"
+                        f"⏳ ETA: <code>{eta}</code>"
+                    )
+                    await _safe_edit(client, chat_id, status_msg_id, text)
 
                 output_path = await render_video(
                     input_path=input_path,
@@ -369,23 +372,16 @@ def register(app: Client):
                 )
 
                 if not output_path:
-                    await _safe_edit(status_msg,
+                    await _safe_edit(client, chat_id, status_msg_id,
                         "❌ <b>Render failed!</b>\n"
                         "FFmpeg encountered an error. Please try again."
                     )
                     return
 
-                render_time = time.time() - render_start
                 out_size = os.path.getsize(output_path) / (1024 * 1024)
-                render_status = f"Done! [{out_size:.1f} MB in {render_time:.0f}s]"
-                await _safe_edit(status_msg, build_terminal_text())
 
                 # ── Step 3: Upload as Document ─────────────────────────────────
-                ul_status = "0.0 MB / 0.0 MB (0%)\n[▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱]"
-                await _safe_edit(status_msg, build_terminal_text())
-
                 async def ul_progress(current, total):
-                    nonlocal ul_status
                     now = time.time()
                     if now - last_edit_time[0] < 3.0:
                         return
@@ -394,9 +390,13 @@ def register(app: Client):
                     cur_mb = current / (1024 * 1024)
                     tot_mb = total / (1024 * 1024)
                     pct = (current / total) * 100 if total > 0 else 0
-                    bar = _make_progress_bar_chars(pct, 15)
-                    ul_status = f"{cur_mb:.1f} MB / {tot_mb:.1f} MB ({pct:.1f}%)\n[{bar}]"
-                    await _safe_edit(status_msg, build_terminal_text())
+                    bar = _make_progress_bar_chars(pct, 10)
+                    text = (
+                        f"📤 <b>UPLOADING YOUR VIDEO...</b>\n\n"
+                        f"Progress: [<code>{bar}</code>] {pct:.0f}%\n"
+                        f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
+                    )
+                    await _safe_edit(client, chat_id, status_msg_id, text)
 
                 caption = (
                     f"🎬 <b>GAMEOVER EDITS</b>\n\n"
@@ -414,9 +414,6 @@ def register(app: Client):
                     force_document=True,  # Never compress as video
                     progress=ul_progress,
                 )
-
-                ul_status = "Done!"
-                await _safe_edit(status_msg, build_terminal_text())
 
                 # Record the edit in DB
                 record_edit(user.id)
@@ -450,7 +447,7 @@ def register(app: Client):
                 import traceback
                 traceback.print_exc()
                 print(f"[Edit Plugin] ❌ Job {job_id} error: {e}")
-                await _safe_edit(status_msg, f"❌ <b>An unexpected error occurred:</b>\n<code>{e}</code>")
+                await _safe_edit(client, chat_id, status_msg_id, f"❌ <b>An unexpected error occurred:</b>\n<code>{e}</code>")
 
             finally:
                 # Always clean up temp files
@@ -469,7 +466,7 @@ def register(app: Client):
         )
 
         if pos > 1:
-            await _safe_edit(status_msg,
+            await _safe_edit(client, message.chat.id, status_msg.id,
                 f"📋 <b>Added to queue!</b>\n\n"
                 f"🆔 <b>Job ID:</b> <code>{job_id}</code>\n"
                 f"🎬 <b>Quality:</b> {profile['label']}\n"
@@ -480,10 +477,15 @@ def register(app: Client):
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
-async def _safe_edit(message: Message, text: str):
+async def _safe_edit(client: Client, chat_id: int, message_id: int, text: str):
     """Edit a message safely, logging any errors to stderr."""
     try:
-        await message.edit_text(text, parse_mode=enums.ParseMode.HTML)
+        await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode=enums.ParseMode.HTML
+        )
     except Exception as e:
         import sys
-        print(f"[SafeEdit Error] Failed to edit message {message.id}: {e}", file=sys.stderr)
+        print(f"[SafeEdit Error] Failed to edit message {message_id} in chat {chat_id}: {e}", file=sys.stderr)
