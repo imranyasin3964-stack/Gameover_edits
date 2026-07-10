@@ -113,11 +113,17 @@ def register(app: Client):
 
         # Check daily quota for free users
         if not can_edit(user.id, Config.DAILY_FREE_LIMIT):
+            bot_me = await client.get_me()
+            invite_link = f"https://t.me/{bot_me.username}?start={user.id}"
             await message.reply_text(
-                "❌ <b>You've used your free edit for today.</b>\n\n"
-                "Come back tomorrow or get Premium for unlimited!",
+                "❌ <b>Out of Free Edits!</b>\n"
+                "You have used all your free edits.\n\n"
+                "🎁 <b>Want more?</b> Invite your friends using your link below. For every friend that joins, you get 2 FREE EDITS!\n\n"
+                "💎 Or buy Premium for UNLIMITED edits.",
                 parse_mode=enums.ParseMode.HTML,
-                reply_markup=_quality_reply_keyboard()
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎁 Invite & Earn Free Edits", url=invite_link)]
+                ])
             )
             return
 
@@ -219,13 +225,36 @@ def register(app: Client):
             if not mime.startswith("video/"):
                 return  # Not a video document, ignore
 
+        # ── Check Cooldown ─────────────────────────────────────────────────────
+        from core.db import get_cooldown_remaining
+        cooldown = get_cooldown_remaining(user.id)
+        if cooldown > 0:
+            clear_state(user.id)
+            minutes = int(cooldown // 60) + (1 if cooldown % 60 > 0 else 0)
+            await message.reply_text(
+                f"⏳ <b>Server Cooldown Active!</b>\n"
+                f"To prevent server overload, free users must wait 30 minutes between edits.\n\n"
+                f"Time remaining: <code>{minutes} minutes</code>.\n"
+                f"💎 <i>Upgrade to Premium to bypass this wait!</i>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return
+
         # ── Check daily quota again (race condition protection) ───────────────
         if not can_edit(user.id, Config.DAILY_FREE_LIMIT):
             clear_state(user.id)
+            bot_me = await client.get_me()
+            invite_link = f"https://t.me/{bot_me.username}?start={user.id}"
             await message.reply_text(
-                "❌ <b>Daily limit reached!</b> You've used your free edit for today.\n"
-                "Type /premium to learn about unlimited access.",
-                parse_mode=enums.ParseMode.HTML
+                "❌ <b>Out of Free Edits!</b>\n"
+                "You have used all your free edits.\n\n"
+                "🎁 <b>Want more?</b> Invite your friends using your link below. For every friend that joins, you get 2 FREE EDITS!\n\n"
+                "💎 Or buy Premium for UNLIMITED edits.",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎁 Invite & Earn Free Edits", url=invite_link)]
+                ])
             )
             return
 

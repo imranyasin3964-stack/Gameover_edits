@@ -3,7 +3,7 @@
 """
 
 from pyrogram import Client, filters, enums
-from pyrogram.types import Message
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import Config
 from core.db import get_remaining_edits, is_premium, get_premium_expiry
@@ -25,15 +25,12 @@ HELP_TEXT = """
 
 🎬 <b>1080p — 60 FPS</b> (Free)
    → Full HD, smooth 60fps, ~1-2 min render
-   → Great for daily sharing
 
 🎥 <b>2K — 60 FPS</b> (Free)
    → 2560×1440 resolution, crisp detail
-   → Perfect for TikTok & Reels creators
 
 💎 <b>4K — 120 FPS</b> (Premium Only)
    → Ultra HD 3840×2160, buttery 120fps
-   → Professional-grade Beast Mode render
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 <b>COMMANDS:</b>
@@ -41,11 +38,18 @@ HELP_TEXT = """
 /edit — Open quality selection menu
 /help — Show this help message
 /premium — View premium info & pricing
+/myplan — Show subscription status & credits
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-<b>LIMITS:</b>
-• <b>Free Users:</b> 1 render per day
-• <b>Premium Users:</b> Unlimited renders, Beast Mode unlocked 🔓
+<b>LIMITS & COOLDOWNS:</b>
+• <b>Free Users:</b> 1 render per day.
+• <b>Cooldown Rule:</b> Free users must wait <b>30 minutes</b> between rendering requests.
+• <b>Premium Users:</b> Unlimited renders, no cooldowns, Beast Mode unlocked 🔓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+<b>🎁 REFERRAL SYSTEM (INVITE & EARN):</b>
+Want more free edits? Click the button in /start or type `/start` to invite your friends.
+For every friend who joins via your link, you get <b>+2 FREE Edit Credits</b> instantly!
 
 For premium access, contact: {owner}
 """.strip()
@@ -78,7 +82,7 @@ To get Premium access, contact the Admin directly:
 
 def register(app: Client):
 
-    @app.on_message(filters.command("start"))
+    @app.on_message(filters.command(["start", "menu"]))
     async def start_command(client: Client, message: Message):
         user = message.from_user
         if not user:
@@ -86,16 +90,29 @@ def register(app: Client):
         
         name = user.first_name
 
+        # Parse referral parameters from /start if present
+        referrer_id = None
+        parts = message.text.split()
+        if len(parts) > 1:
+            try:
+                ref_param = int(parts[1])
+                if ref_param != user.id:
+                    referrer_id = ref_param
+            except ValueError:
+                pass
+
         # ── User Registration & Admin Notification ──────────────────────────────────
-        from core.db import add_user, get_setting
+        from core.db import add_user, get_setting, add_credits
         is_new = add_user(
             user_id=user.id,
             username=user.username,
             first_name=user.first_name,
-            last_name=user.last_name
+            last_name=user.last_name,
+            referred_by=referrer_id
         )
 
         if is_new:
+            # Send join notification to Owner
             try:
                 username_str = f" (@{user.username})" if user.username else ""
                 await client.send_message(
@@ -107,6 +124,22 @@ def register(app: Client):
                 )
             except Exception as e:
                 print(f"[Help Plugin] ⚠️ Failed to notify owner: {e}")
+
+            # Reward Referrer with +2 credits
+            if referrer_id:
+                try:
+                    add_credits(referrer_id, 2)
+                    await client.send_message(
+                        chat_id=referrer_id,
+                        text=(
+                            f"🎉 <b>Congratulations!</b>\n\n"
+                            f"A new user joined via your link.\n"
+                            f"You earned <b>+2 free edits</b>!"
+                        ),
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception as ref_err:
+                    print(f"[Help Plugin] ⚠️ Failed to reward/notify referrer {referrer_id}: {ref_err}")
 
         remaining = get_remaining_edits(user.id, Config.DAILY_FREE_LIMIT)
         is_vip    = is_premium(user.id)
@@ -130,6 +163,11 @@ def register(app: Client):
             f"Type /help for the full guide."
         )
 
+        # Inline Button: Invite & Earn
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎁 Invite & Earn Free Edits", callback_data="invite_earn")]
+        ])
+
         # Retrieve dynamic welcome media
         db_start_video = get_setting("start_video_file_id", "")
         db_video_type = get_setting("start_video_type", "video")
@@ -142,14 +180,33 @@ def register(app: Client):
                           start_source.endswith(".gif") or 
                           "animation" in db_video_type)
                 if is_gif:
-                    await message.reply_animation(start_source, caption=text, parse_mode=enums.ParseMode.HTML)
+                    await message.reply_animation(start_source, caption=text, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
                 else:
-                    await message.reply_video(start_source, caption=text, parse_mode=enums.ParseMode.HTML)
+                    await message.reply_video(start_source, caption=text, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
                 return
             except Exception as e:
                 print(f"[Help Plugin] ⚠️ Failed to send start welcome video: {e}")
 
-        await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
+        await message.reply_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
+
+    @app.on_callback_query(filters.regex(r"^invite_earn$"))
+    async def invite_earn_callback(client: Client, query: CallbackQuery):
+        user = query.from_user
+        bot_me = await client.get_me()
+        invite_link = f"https://t.me/{bot_me.username}?start={user.id}"
+        await query.answer()
+        await client.send_message(
+            chat_id=query.message.chat.id,
+            text=(
+                f"🎁 <b>Invite & Earn Free Edits</b>\n\n"
+                f"Share your referral link with friends. For every friend that starts the bot using your link, "
+                f"you will earn <b>+2 FREE EDITS</b>!\n\n"
+                f"🔗 <b>Your Unique Link:</b>\n"
+                f"<code>{invite_link}</code>\n\n"
+                f"<i>(Hold/Tap to copy the link and share it anywhere!)</i>"
+            ),
+            parse_mode=enums.ParseMode.HTML
+        )
 
     @app.on_message(filters.command("help"))
     async def help_command(client: Client, message: Message):

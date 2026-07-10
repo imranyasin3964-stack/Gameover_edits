@@ -19,6 +19,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 
+import time
+
 DB_PATH = "gameedit.db"
 
 
@@ -83,11 +85,13 @@ def init_db(db_path: str = DB_PATH):
 
             -- Tracks all registered users
             CREATE TABLE IF NOT EXISTS users (
-                user_id     INTEGER PRIMARY KEY,
-                username    TEXT,
-                first_name  TEXT,
-                last_name   TEXT,
-                joined_at   TEXT NOT NULL
+                user_id         INTEGER PRIMARY KEY,
+                username        TEXT,
+                first_name      TEXT,
+                last_name       TEXT,
+                joined_at       TEXT NOT NULL,
+                last_used_time  REAL DEFAULT 0,
+                referred_by     INTEGER
             );
 
             -- Dynamic bot settings (key/value store)
@@ -98,13 +102,10 @@ def init_db(db_path: str = DB_PATH):
         """)
         conn.commit()
 
-        # ── Forward-migration: add expiry_date if upgrading from an old DB ────
-        # Old schema had no expiry_date column.  Silently add it so existing
-        # premium users keep access (we set their expiry far in the future).
+        # ── Forward-migration: add columns if upgrading from an old DB ────
         try:
             conn.execute("ALTER TABLE premium_users ADD COLUMN expiry_date TEXT NOT NULL DEFAULT ''")
             conn.commit()
-            # Give existing rows a 10-year lifetime so nothing breaks
             far_future = (_now_utc() + timedelta(days=3650)).isoformat()
             conn.execute(
                 "UPDATE premium_users SET expiry_date = ? WHERE expiry_date = ''",
@@ -113,7 +114,18 @@ def init_db(db_path: str = DB_PATH):
             conn.commit()
             print("[DB] ⬆️  Migrated premium_users table: added expiry_date column.")
         except sqlite3.OperationalError:
-            # Column already exists — normal path for fresh or already-migrated DBs
+            pass
+
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN last_used_time REAL DEFAULT 0")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
+            conn.commit()
+        except sqlite3.OperationalError:
             pass
 
     print(f"[DB] ✅ Database initialized: {db_path}")
@@ -312,6 +324,9 @@ def record_edit(user_id: int):
         use_credit(user_id)
         # Continue to record in daily_usage for stats
     
+    # Update last used time for anti-spam cooldown
+    set_last_used_time(user_id, time.time())
+    
     today = _get_today()
     with _connect() as conn:
         conn.execute("""
@@ -366,6 +381,7 @@ def add_user(
     username: Optional[str],
     first_name: Optional[str],
     last_name: Optional[str],
+    referred_by: Optional[int] = None
 ) -> bool:
     """
     Register or update a user.
@@ -384,12 +400,36 @@ def add_user(
             conn.commit()
             return False
         conn.execute(
-            "INSERT INTO users (user_id, username, first_name, last_name, joined_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, username or "", first_name or "", last_name or "", joined_at)
+            "INSERT INTO users (user_id, username, first_name, last_name, joined_at, referred_by, last_used_time) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0)",
+            (user_id, username or "", first_name or "", last_name or "", joined_at, referred_by)
         )
         conn.commit()
         return True
+
+
+def get_last_used_time(user_id: int) -> float:
+    with _connect() as conn:
+        row = conn.execute("SELECT last_used_time FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        return row["last_used_time"] if row and row["last_used_time"] else 0.0
+
+
+def set_last_used_time(user_id: int, timestamp: float):
+    with _connect() as conn:
+        conn.execute("UPDATE users SET last_used_time = ? WHERE user_id = ?", (timestamp, user_id))
+        conn.commit()
+
+
+def get_cooldown_remaining(user_id: int) -> float:
+    """Return remaining cooldown seconds. Premium users have 0 cooldown."""
+    if is_premium(user_id):
+        return 0.0
+    last_used = get_last_used_time(user_id)
+    if not last_used:
+        return 0.0
+    elapsed = time.time() - last_used
+    remaining = 1800.0 - elapsed  # 30 minutes = 1800 seconds
+    return max(0.0, remaining)
 
 
 # ── Settings ────────────────────────────────────────────────────────────────────
