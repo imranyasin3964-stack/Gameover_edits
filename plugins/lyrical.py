@@ -9,11 +9,11 @@ import uuid
 import asyncio
 import traceback
 from pyrogram import Client, filters, enums
-from pyrogram.types import Message, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from config import Config
 from core.db import get_credits, add_credits, is_premium
-from core.states import set_state, get_state, clear_state, is_waiting
+from core.states import set_state, get_state, clear_state
 from core.lyrics_engine import (
     get_audio_duration,
     process_lofi_audio,
@@ -21,7 +21,6 @@ from core.lyrics_engine import (
     render_lyrical_video,
     extract_audio_from_video
 )
-from plugins.edit import _safe_edit
 
 INPUT_DIR = os.path.join("downloads", "input")
 RENDER_DIR = os.path.join("downloads", "renders")
@@ -31,6 +30,22 @@ def _make_progress_bar_chars(pct: float, length: int = 10) -> str:
     filled = int(round(pct / 100 * length))
     empty  = length - filled
     return f"{'▰' * filled}{'▱' * empty}"
+
+
+async def _edit_status(client: Client, chat_id: int, msg_id: int, text: str):
+    """Safe wrapper around edit_message_text that silently ignores stale-message errors."""
+    try:
+        await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=msg_id,
+            text=text,
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception as e:
+        # Silently ignore MESSAGE_ID_INVALID and FloodWait; log everything else
+        err = str(e)
+        if "MESSAGE_ID_INVALID" not in err and "MESSAGE_NOT_MODIFIED" not in err:
+            print(f"[Lyrical Plugin] Edit warning: {e}")
 
 
 def register(app: Client):
@@ -55,9 +70,10 @@ def register(app: Client):
         set_state(user_id, "waiting_lyrical_audio", message.chat.id)
         await message.reply_text(
             "🎵 <b>Automated Lyrical Status Generator</b>\n\n"
-            "Please send or forward the <b>Audio file (.mp3, .m4a, .wav)</b> or <b>Voice Note</b> you want to use.\n\n"
+            "Please send or forward the <b>Audio file (.mp3, .m4a, .wav)</b>, "
+            "<b>Video</b>, or <b>Voice Note</b> you want to use.\n\n"
             "⚡ <i>The bot will:\n"
-            "1. Process it into Slowed & Reverb lofi.\n"
+            "1. Process it into Slowed &amp; Reverb lofi.\n"
             "2. Generate timed lyrics with Whisper AI.\n"
             "3. Render a stunning cinematic status video!</i>\n\n"
             "💰 Cost: <code>1 Credit</code> (Free for Premium)",
@@ -65,7 +81,7 @@ def register(app: Client):
             reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
         )
 
-    # Listen to audio message uploads in waiting_lyrical_audio state
+    # ── Custom filter: only fire when user is in lyrical waiting state ──────────
     def is_waiting_lyrical_audio(_, __, message: Message) -> bool:
         if not message.from_user:
             return False
@@ -77,11 +93,11 @@ def register(app: Client):
         & filters.create(is_waiting_lyrical_audio)
     )
     async def lyrical_input_handler(client: Client, message: Message):
-        user = message.from_user
+        user     = message.from_user
         owner_id = user.id
-        chat_id = message.chat.id
+        chat_id  = message.chat.id
 
-        # Cancel action
+        # ── Cancel ────────────────────────────────────────────────────────────
         if message.text and message.text.strip() == "❌ Cancel":
             clear_state(owner_id)
             await message.reply_text(
@@ -91,10 +107,9 @@ def register(app: Client):
             )
             return
 
-        # Ensure attachment is audio, voice note, video, or valid doc format
-        audio_obj = message.audio or message.voice or message.video or message.document
+        # ── Validate media type ───────────────────────────────────────────────
         is_media_ok = False
-        is_video = False
+        is_video    = False
 
         if message.audio or message.voice or message.video:
             is_media_ok = True
@@ -115,9 +130,9 @@ def register(app: Client):
             )
             return
 
-        # Double check credits
+        # ── Credit check ─────────────────────────────────────────────────────
         credits = get_credits(user.id)
-        is_vip = is_premium(user.id)
+        is_vip  = is_premium(user.id)
         if not is_vip and credits <= 0:
             clear_state(owner_id)
             await message.reply_text(
@@ -133,28 +148,29 @@ def register(app: Client):
             add_credits(user.id, -1)
             has_deducted = True
 
-        # Clear state so user cannot trigger double processes
+        # Clear state so the user cannot trigger double processes
         clear_state(owner_id)
 
-        job_id = uuid.uuid4().hex[:8]
+        # ── Send initial status message ───────────────────────────────────────
+        job_id     = uuid.uuid4().hex[:8]
         status_msg = await message.reply_text(
             "⏳ <b>Initializing Lyrical Engine...</b>",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=ReplyKeyboardRemove()
         )
-        status_msg_id = status_msg.id
+        # Store both chat_id and msg_id at the top level for every helper below
+        status_chat_id = status_msg.chat.id
+        status_msg_id  = status_msg.id
 
-        raw_video_path = None
+        raw_video_path  = None
         input_audio_path = None
-        lofi_audio_path = None
-        srt_path = None
+        lofi_audio_path  = None
+        srt_path         = None
         output_video_path = None
 
         try:
-            # ── Step 1: Download Media ─────────────────────────────────────────
+            # ── Step 1: Download Media ────────────────────────────────────────
             ext = ".mp4" if is_video else ".mp3"
-            
-            # Determine appropriate extension from downloaded media
             target_media = message.audio or message.voice or message.video or message.document
             if target_media and hasattr(target_media, "file_name") and target_media.file_name:
                 _, fext = os.path.splitext(target_media.file_name)
@@ -162,10 +178,10 @@ def register(app: Client):
                     ext = fext
 
             download_target_path = os.path.join(INPUT_DIR, f"ly_dl_{job_id}{ext}")
-            input_audio_path = os.path.join(INPUT_DIR, f"ly_in_{job_id}.mp3")
-            lofi_audio_path = os.path.join(INPUT_DIR, f"ly_lofi_{job_id}.wav")
-            srt_path = os.path.join(INPUT_DIR, f"ly_subs_{job_id}.srt")
-            output_video_path = os.path.join(RENDER_DIR, f"ly_out_{job_id}.mp4")
+            input_audio_path     = os.path.join(INPUT_DIR, f"ly_in_{job_id}.mp3")
+            lofi_audio_path      = os.path.join(INPUT_DIR, f"ly_lofi_{job_id}.wav")
+            srt_path             = os.path.join(INPUT_DIR, f"ly_subs_{job_id}.srt")
+            output_video_path    = os.path.join(RENDER_DIR, f"ly_out_{job_id}.mp4")
 
             last_edit_time = [time.time()]
 
@@ -174,28 +190,30 @@ def register(app: Client):
                 if now - last_edit_time[0] < 3.0:
                     return
                 last_edit_time[0] = now
-
                 cur_mb = current / (1024 * 1024)
                 tot_mb = total / (1024 * 1024)
-                pct = (current / total) * 100 if total > 0 else 0
-                bar = _make_progress_bar_chars(pct, 10)
-                media_label = "VIDEO" if is_video else "AUDIO"
-                text = (
-                    f"📥 <b>DOWNLOADING {media_label} TRACK...</b>\n\n"
+                pct    = (current / total) * 100 if total > 0 else 0
+                bar    = _make_progress_bar_chars(pct, 10)
+                label  = "VIDEO" if is_video else "AUDIO"
+                await _edit_status(
+                    client, status_chat_id, status_msg_id,
+                    f"📥 <b>DOWNLOADING {label} TRACK...</b>\n\n"
                     f"Progress: {bar} {pct:.0f}%\n"
                     f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
                 )
-                await _safe_edit(client, chat_id, status_msg_id, text)
 
             await client.download_media(message, file_name=download_target_path, progress=dl_progress)
 
             if not os.path.exists(download_target_path) or os.path.getsize(download_target_path) < 500:
                 raise ValueError("Downloaded file is empty or corrupted.")
 
-            # If it is a video, extract the audio stream first
+            # ── Step 2: Extract audio if video was sent ───────────────────────
             if is_video:
                 raw_video_path = download_target_path
-                await _safe_edit(client, chat_id, status_msg_id, "🔊 <b>EXTRACTING AUDIO STREAM FROM VIDEO...</b>\n\n<i>Please wait...</i>")
+                await _edit_status(
+                    client, status_chat_id, status_msg_id,
+                    "🔊 <b>EXTRACTING AUDIO STREAM FROM VIDEO...</b>\n\n<i>Please wait...</i>"
+                )
                 extract_ok = await extract_audio_from_video(raw_video_path, input_audio_path)
                 if not extract_ok:
                     raise ValueError("Could not extract audio track from video.")
@@ -206,19 +224,25 @@ def register(app: Client):
             if duration <= 0:
                 raise ValueError("Could not determine audio duration.")
 
-            # ── Step 2: Lofi Reverb Filtering ──────────────────────────────────
-            await _safe_edit(client, chat_id, status_msg_id, "🎸 <b>APPLYING SLOWED & REVERB FILTERS...</b>\n\n<i>This lowers pitch and adds depth. Please wait...</i>")
+            # ── Step 3: Lofi Reverb Filtering ─────────────────────────────────
+            await _edit_status(
+                client, status_chat_id, status_msg_id,
+                "🎸 <b>APPLYING SLOWED &amp; REVERB FILTERS...</b>\n\n"
+                "<i>This lowers pitch and adds depth. Please wait...</i>"
+            )
             lofi_ok = await process_lofi_audio(input_audio_path, lofi_audio_path)
             if not lofi_ok:
                 raise ValueError("Failed to apply lofi filter.")
 
-            # Adjust expected video duration because asetrate=44100*0.85 increases duration by ~17.6% (1 / 0.85)
+            # asetrate=44100*0.85 lengthens audio by factor of 1/0.85 ≈ 1.176
             video_duration = duration / 0.85
 
-            # ── Step 3: Whisper AI Transcription ──────────────────────────────
-            await _safe_edit(client, chat_id, status_msg_id, "🤖 <b>WHISPER AI GENERATING LYRICS...</b>\n\n<i>Transcribing timestamps. This takes a few moments...</i>")
-            
-            # Transcription is blocking, run in executor
+            # ── Step 4: Whisper AI Transcription ──────────────────────────────
+            await _edit_status(
+                client, status_chat_id, status_msg_id,
+                "🤖 <b>WHISPER AI GENERATING LYRICS...</b>\n\n"
+                "<i>Transcribing timestamps. This takes a few moments...</i>"
+            )
             loop = asyncio.get_event_loop()
             trans_ok = await loop.run_in_executor(
                 None, transcribe_audio_to_srt, lofi_audio_path, srt_path
@@ -226,34 +250,29 @@ def register(app: Client):
             if not trans_ok:
                 raise ValueError("Whisper transcription failed.")
 
-            # ── Step 4: Render Subtitled Video ─────────────────────────────────
-            # Initial render status
-            initial_bar = _make_progress_bar_chars(0.0, 10)
-            initial_text = (
+            # ── Step 5: Render Subtitled Video ────────────────────────────────
+            await _edit_status(
+                client, status_chat_id, status_msg_id,
                 f"⚙️ <b>GAMEOVER ENGINE RENDER...</b>\n\n"
-                f"Progress: {initial_bar} 0%\n"
+                f"Progress: {_make_progress_bar_chars(0, 10)} 0%\n"
                 f"⏱ Elapsed: <code>0s</code>\n"
                 f"⏳ ETA: <code>Calculating...</code>"
             )
-            await _safe_edit(client, chat_id, status_msg_id, initial_text)
 
             async def render_progress(info: dict):
                 now = time.time()
                 if now - last_edit_time[0] < 3.0:
                     return
                 last_edit_time[0] = now
-
-                pct = info["pct"]
-                elapsed = info["elapsed"]
-                eta = info["eta"]
-                bar = _make_progress_bar_chars(pct, 10)
-                text = (
+                pct  = info["pct"]
+                bar  = _make_progress_bar_chars(pct, 10)
+                await _edit_status(
+                    client, status_chat_id, status_msg_id,
                     f"⚙️ <b>GAMEOVER ENGINE RENDER...</b>\n\n"
                     f"Progress: {bar} {pct:.0f}%\n"
-                    f"⏱ Elapsed: <code>{elapsed}</code>\n"
-                    f"⏳ ETA: <code>{eta}</code>"
+                    f"⏱ Elapsed: <code>{info['elapsed']}</code>\n"
+                    f"⏳ ETA: <code>{info['eta']}</code>"
                 )
-                await _safe_edit(client, chat_id, status_msg_id, text)
 
             render_ok = await render_lyrical_video(
                 audio_path=lofi_audio_path,
@@ -264,30 +283,29 @@ def register(app: Client):
                 progress_callback=render_progress
             )
             if not render_ok:
-                raise ValueError("FFmpeg rendering failed.")
+                raise ValueError("FFmpeg rendering failed. Check terminal for detailed FFmpeg error log.")
 
-            # ── Step 5: Upload Lyrical Video ───────────────────────────────────
+            # ── Step 6: Upload Lyrical Video ──────────────────────────────────
             async def ul_progress(current, total):
                 now = time.time()
                 if now - last_edit_time[0] < 3.0:
                     return
                 last_edit_time[0] = now
-
                 cur_mb = current / (1024 * 1024)
                 tot_mb = total / (1024 * 1024)
-                pct = (current / total) * 100 if total > 0 else 0
-                bar = _make_progress_bar_chars(pct, 10)
-                text = (
+                pct    = (current / total) * 100 if total > 0 else 0
+                bar    = _make_progress_bar_chars(pct, 10)
+                await _edit_status(
+                    client, status_chat_id, status_msg_id,
                     f"📤 <b>UPLOADING LYRICAL VIDEO...</b>\n\n"
                     f"Progress: {bar} {pct:.0f}%\n"
                     f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
                 )
-                await _safe_edit(client, chat_id, status_msg_id, text)
 
             out_size = os.path.getsize(output_video_path) / (1024 * 1024)
-            caption = (
+            caption  = (
                 f"🎬 <b>GAMEOVER LYRICAL STATUS</b>\n\n"
-                f"✅ <b>Slowed & Reverb:</b> Yes 🎸\n"
+                f"✅ <b>Slowed &amp; Reverb:</b> Yes 🎸\n"
                 f"📝 <b>Whisper Timed Subtitles:</b> Yes 🤖\n"
                 f"📦 <b>Size:</b> <code>{out_size:.1f} MB</code>\n"
                 f"🆔 <b>Job ID:</b> <code>{job_id}</code>\n\n"
@@ -303,8 +321,9 @@ def register(app: Client):
                 progress=ul_progress
             )
 
+            # Delete the status message after upload
             try:
-                await status_msg.delete()
+                await client.delete_messages(chat_id=status_chat_id, message_ids=status_msg_id)
             except Exception:
                 pass
 
@@ -330,15 +349,15 @@ def register(app: Client):
             if has_deducted:
                 add_credits(user.id, 1)
 
-            await _safe_edit(
-                client, chat_id, status_msg_id,
+            await _edit_status(
+                client, status_chat_id, status_msg_id,
                 f"❌ <b>Process Failed!</b>\n\n"
                 f"Reason: <code>{str(e)}</code>\n\n"
-                f"<i>Your credit has been refunded. Please try with another audio file.</i>"
+                f"<i>Your credit has been refunded. Please try with another file.</i>"
             )
 
         finally:
-            # Clean up temp files
+            # Clean up all temp files
             for p in [raw_video_path, input_audio_path, lofi_audio_path, srt_path, output_video_path]:
                 if p and os.path.exists(p):
                     try:

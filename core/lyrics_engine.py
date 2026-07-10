@@ -16,22 +16,23 @@ import whisper
 from typing import Optional, Callable, Awaitable
 
 
-def _get_font_file() -> str:
-    """Return a valid font path depending on the operating system."""
+def _escape_srt_path(srt_path: str) -> str:
+    """
+    Safely escape the SRT path for use inside FFmpeg subtitles filter.
+    Converts to absolute path and escapes special characters.
+    On Linux, colons and backslashes are the main concerns.
+    """
+    abs_path = os.path.abspath(srt_path)
+    # On Linux/Mac, escape colons and backslashes for FFmpeg filter chain
     if sys.platform.startswith("win"):
-        font_path = "C:/Windows/Fonts/arial.ttf"
-        if os.path.exists(font_path):
-            return font_path.replace(":", "\\:")
+        # Windows: replace drive-letter colon and use forward slashes
+        abs_path = abs_path.replace("\\", "/")
+        if len(abs_path) >= 2 and abs_path[1] == ":":
+            abs_path = abs_path[0] + "\\:" + abs_path[2:]
     else:
-        for path in [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ]:
-            if os.path.exists(path):
-                return path
-    return ""
+        # Linux/Mac: escape colons
+        abs_path = abs_path.replace(":", "\\:")
+    return abs_path
 
 
 def _format_srt_time(seconds: float) -> str:
@@ -81,9 +82,11 @@ async def process_lofi_audio(input_path: str, output_path: str) -> bool:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
+            stderr=asyncio.subprocess.PIPE
         )
-        await proc.wait()
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            print(f"[Lyrics Engine] Lofi FFmpeg stderr:\n{stderr.decode(errors='ignore')}")
         return os.path.exists(output_path) and os.path.getsize(output_path) > 1000
     except Exception as e:
         print(f"[Lyrics Engine] Lofi conversion failed: {e}")
@@ -94,7 +97,7 @@ async def extract_audio_from_video(video_path: str, audio_path: str) -> bool:
     """Extract audio stream from a video file using FFmpeg."""
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
-        "-vn", "-ac", "2", "-ar", "44100", "-ab", "192k",
+        "-vn", "-ac", "2", "-ar", "44100", "-b:a", "192k",
         audio_path
     ]
     print(f"[Lyrics Engine] Extracting audio from video: {' '.join(cmd)}")
@@ -102,9 +105,11 @@ async def extract_audio_from_video(video_path: str, audio_path: str) -> bool:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
+            stderr=asyncio.subprocess.PIPE
         )
-        await proc.wait()
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            print(f"[Lyrics Engine] Extract FFmpeg stderr:\n{stderr.decode(errors='ignore')}")
         return os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000
     except Exception as e:
         print(f"[Lyrics Engine] Audio extraction failed: {e}")
@@ -140,40 +145,51 @@ async def render_lyrical_video(
     watermark_text: str,
     progress_callback: Optional[Callable[[dict], Awaitable[None]]] = None
 ) -> bool:
-    """Render 1080p aesthetic dark background video, burning subtitles and watermark."""
-    escaped_srt = srt_path.replace(":", "\\:").replace("\\", "/")
-    font_file = _get_font_file()
-    font_opt = f":fontfile='{font_file}'" if font_file else ""
-    
-    # Subtitles and watermark drawing configurations
-    # Using 'DejaVu Sans Bold' (or default Arial fallback), size 30, white color, thick black outline, drop shadow
+    """
+    Render 1080p aesthetic dark background video, burning subtitles and watermark.
+
+    Command structure (safe & portable):
+      ffmpeg -y
+        -f lavfi -i color=c=0x0a0f18:s=1920x1080:d={duration}   (video canvas)
+        -i {audio_path}                                           (audio track)
+        -vf "vignette=0.5, subtitles=..., drawtext=..."          (all filters via -vf)
+        -c:v libx264 -preset medium -crf 18
+        -c:a aac -b:a 192k -shortest
+        output.mp4
+    """
+    escaped_srt = _escape_srt_path(srt_path)
+
+    # Subtitles style: system-default font (let libass choose), bold, size 30, white, thick outline + shadow, centered
     subtitles_filter = (
-        f"subtitles={escaped_srt}:force_style='Fontname=DejaVu Sans Bold,Fontsize=30,"
-        f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2'"
+        f"subtitles='{escaped_srt}':force_style='"
+        f"Fontsize=30,PrimaryColour=&H00FFFFFF,"
+        f"OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2'"
     )
-    
+
+    # Watermark in bottom-right corner
     watermark_filter = (
         f"drawtext=text='{watermark_text}':fontsize=40:fontcolor=white@0.65"
         f":x=w-tw-20:y=h-th-20:shadowx=2:shadowy=2:shadowcolor=black@0.9"
     )
 
-    # 1. Color canvas (dark blue/grey Spotify-like gradient look)
-    # 2. Vignette filter for dark cinematic edges
-    # 3. Burn subtitles
-    # 4. Burn watermark
-    filter_chain = f"color=c=0x0a0f18:s=1920x1080:d={duration},vignette=0.5,{subtitles_filter},{watermark_filter}"
+    # Full video filter chain via -vf (NOT inside lavfi -i)
+    vf_chain = f"vignette=0.5,{subtitles_filter},{watermark_filter}"
+
+    # Canvas input: pure lavfi color source
+    canvas_input = f"color=c=0x0a0f18:s=1920x1080:d={duration}"
 
     cmd = [
         "ffmpeg", "-y",
-        "-f", "lavfi", "-i", filter_chain,
-        "-i", audio_path,
+        "-f", "lavfi", "-i", canvas_input,   # Input 0: dark canvas
+        "-i", audio_path,                     # Input 1: lofi audio
+        "-vf", vf_chain,                      # Video filters (subtitle + vignette + watermark)
         "-c:v", "libx264", "-preset", "medium", "-crf", "18",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         output_path
     ]
 
-    print(f"[Lyrics Engine] Rendering video: {' '.join(cmd)}")
+    print(f"[Lyrics Engine] Rendering video:\n  {' '.join(cmd)}")
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -181,24 +197,25 @@ async def render_lyrical_video(
             stderr=asyncio.subprocess.PIPE
         )
 
-        # Monitor FFmpeg progress asynchronously
+        # Monitor FFmpeg progress from stderr asynchronously
         start_time = time.time()
+        stderr_lines = []
+
         while True:
-            # Let's read from stderr where FFmpeg writes progress info
             line_bytes = await proc.stderr.readline()
             if not line_bytes:
                 break
             line = line_bytes.decode(errors="ignore").strip()
-            
-            # Simple progress parser based on time duration elapsed
+            stderr_lines.append(line)
+
+            # Parse FFmpeg progress line
             if "time=" in line:
                 try:
-                    # Extract time=00:00:00.00
                     time_part = line.split("time=")[1].split()[0]
                     h, m, s = time_part.split(":")
-                    elapsed_seconds = int(h)*3600 + int(m)*60 + float(s)
+                    elapsed_seconds = int(h) * 3600 + int(m) * 60 + float(s)
                     pct = min(100.0, (elapsed_seconds / duration) * 100)
-                    
+
                     if progress_callback:
                         elapsed_str = f"{int(time.time() - start_time)}s"
                         speed = "1.0x"
@@ -208,7 +225,7 @@ async def render_lyrical_video(
                         if elapsed_seconds > 0:
                             total_est = (time.time() - start_time) * (duration / elapsed_seconds)
                             eta_val = f"{int(max(0.0, total_est - (time.time() - start_time)))}s"
-                        
+
                         await progress_callback({
                             "pct": pct,
                             "speed": speed,
@@ -220,7 +237,15 @@ async def render_lyrical_video(
                     pass
 
         await proc.wait()
+
+        # Print full stderr if FFmpeg failed
+        if proc.returncode != 0:
+            print("[Lyrics Engine] ❌ FFmpeg render FAILED. Full stderr:")
+            print("\n".join(stderr_lines[-60:]))  # Last 60 lines
+            return False
+
         return os.path.exists(output_path) and os.path.getsize(output_path) > 1000
+
     except Exception as e:
-        print(f"[Lyrics Engine] Video rendering failed: {e}")
+        print(f"[Lyrics Engine] Video rendering exception: {e}")
         return False
