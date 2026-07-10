@@ -161,6 +161,13 @@ def register(app: Client):
         user = message.from_user
         if not user:
             return
+        
+        # Only run edit cancel if the user has an active quality edit state.
+        # This prevents hijacking admin inputs (waiting_search_id, etc.)!
+        state = get_state(user.id)
+        if not state or state.get("quality", "") not in QUALITY_PROFILES:
+            return  # Let other handlers (like admin.py) handle it!
+            
         clear_state(user.id)
         await message.reply_text(
             "❌ <b>Cancelled.</b> Send /edit to start again.",

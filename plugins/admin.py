@@ -70,10 +70,11 @@ def _time_remaining(expiry_dt: datetime) -> str:
 
 async def get_live_system_stats():
     """Retrieve non-blocking live CPU, RAM, and network speeds."""
-    cpu   = psutil.cpu_percent(interval=None)
-    mem   = psutil.virtual_memory().percent
+    psutil.cpu_percent(interval=None)  # Flush CPU counter
     net_1 = psutil.net_io_counters()
     await asyncio.sleep(1.0)
+    cpu   = psutil.cpu_percent(interval=None)  # Measure CPU usage over the 1s interval
+    mem   = psutil.virtual_memory().percent
     net_2 = psutil.net_io_counters()
     sent_speed_kb = (net_2.bytes_sent - net_1.bytes_sent) / 1024.0
     recv_speed_kb = (net_2.bytes_recv - net_1.bytes_recv) / 1024.0

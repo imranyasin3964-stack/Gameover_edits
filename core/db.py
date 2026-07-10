@@ -304,16 +304,14 @@ def can_edit(user_id: int, daily_limit: int) -> bool:
 
 def record_edit(user_id: int):
     """
-    Record one render for quota purposes.
-      • Premium users → no-op
+    Record one render for quota and statistics purposes.
       • Users with credits → decrement one credit
-      • Free users → increment daily counter
+      • Increment daily counter in daily_usage for all users (including premium)
     """
-    if is_premium(user_id):
-        return
-    if get_credits(user_id) > 0:
+    if not is_premium(user_id) and get_credits(user_id) > 0:
         use_credit(user_id)
-        return
+        # Continue to record in daily_usage for stats
+    
     today = _get_today()
     with _connect() as conn:
         conn.execute("""
