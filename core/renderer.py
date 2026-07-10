@@ -1,20 +1,21 @@
 """
-⚡ GAMEOVER EDITS — Master FFmpeg Render Engine v2.0
-=====================================================
+⚡ GAMEOVER EDITS — Master FFmpeg Render Engine v3.0  (Anime & Aesthetic Edition)
+===================================================================================
 Three truly distinct render tiers, each with its own filter chain:
 
   /edit60  → 1080p 60fps  | preset=fast     | CRF 18 | ~5 min
-             Standard bicubic scale, basic color grade. Fast & free.
+             Standard Lanczos scale, basic color grade, 60fps flow.  Fast & free.
 
-  /edit90  → 2K 60fps     | preset=medium   | CRF 16 | ~10 min
-             Stronger Lanczos scale, deeper S-curves, medium unsharp.
+  /edit90  → 2K 90fps     | preset=medium   | CRF 16 | ~10 min
+             Spline scale, tuned eq, reduced unsharp, minterpolate+scd.
 
-  /edit120 → 4K 60fps     | preset=veryslow | CRF 14 | ~25-30 min
-             hqdn3d denoiser → spline36 upscale → extreme S-curve
-             color grading → heavy unsharp. Near-lossless. Max CPU.
+  /edit120 → 4K 120fps    | preset=veryslow | CRF 14 | ~25-30 min
+             hqdn3d(light) → spline upscale → vibrant eq → controlled
+             unsharp → minterpolate+scd.  Anime + real-life universal.
 
 Rules:
-  - NO minterpolate (causes access violations / crashes).
+  - minterpolate uses scd=fdiff (scene-change detection) to prevent
+    fast anime cuts from morphing/melting into each other.
   - stdout=DEVNULL to prevent asyncio subprocess deadlock.
   - Live output file size + ETA + premium progress bars.
 """
@@ -210,14 +211,18 @@ def _build_chain_tier1(profile: dict, watermark_text: str, show_watermark: bool 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TIER 2 — 2K PRO MODE
-# Goal: ~10 minutes. Lanczos scale, deeper curves, optical flow motion interpolation (90 FPS).
+# TIER 2 — 2K PRO MODE  (Anime & Aesthetic Optimised)
+# Goal: ~10 minutes. Spline scale for clean anime edges, tuned colour grade,
+# reduced unsharp to avoid outline grain, 90fps with SCD-aware interpolation.
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_chain_tier2(profile: dict, watermark_text: str, show_watermark: bool = True) -> str:
     """
-    Balance chain for 2K:
-      mpdecimate → yadif=1 → scale lanczos → minterpolate=fps=90
-      → curves(deep blacks) → eq(cinematic sat/gamma) → unsharp(medium)
+    2K Pro chain:
+      mpdecimate → yadif=1
+      → scale spline (cleaner than lanczos for drawn lines)
+      → eq (vibrant, no washed whites)
+      → unsharp (light — won't grain anime outlines)
+      → minterpolate fps=90 + scd=fdiff (fast-cut scene protection)
       → drawtext → format=yuv420p
     """
     w, h, fps = profile["width"], profile["height"], profile["fps"]
@@ -227,11 +232,14 @@ def _build_chain_tier2(profile: dict, watermark_text: str, show_watermark: bool 
     filters = [
         "mpdecimate",
         "yadif=mode=1",
-        f"scale={w}:{h}:flags=lanczos",
-        f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc",
-        "curves=r='0/0 0.05/0.02 0.5/0.48 0.95/0.98 1/1':g='0/0 0.05/0.02 0.5/0.46 0.95/0.97 1/1':b='0/0 0.05/0.02 0.5/0.45 0.95/0.96 1/1'",
-        "eq=contrast=1.2:saturation=1.5:gamma=0.9",
-        "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.25",
+        # Spline: superior to lanczos for anime/drawing edges
+        f"scale={w}:{h}:flags=spline",
+        # Tuned colour — vibrant but not over-blown
+        "eq=contrast=1.1:saturation=1.4:gamma=0.95",
+        # Reduced unsharp — prevents grain on fine anime lines
+        "unsharp=lx=3:ly=3:la=0.5:cx=3:cy=3:ca=0.1",
+        # SCD = scene-change detection, stops cuts from morphing together
+        f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:scd=fdiff",
     ]
     if show_watermark:
         filters.append(_drawtext(wm, font_opt, fontsize=60, padding=30, shadow=3))
@@ -240,33 +248,42 @@ def _build_chain_tier2(profile: dict, watermark_text: str, show_watermark: bool 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TIER 3 — 4K TRUE BEAST MODE
+# TIER 3 — 4K TRUE BEAST MODE  (Anime & Aesthetic Optimised)
 # Goal: 30-40 minutes. Max CPU. Near-lossless. Cinematic 120 FPS.
+# Universal: works perfectly for both real-life footage AND anime/AMV edits.
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_chain_tier3(profile: dict, watermark_text: str, show_watermark: bool = True) -> str:
     """
     True Beast Mode chain for 4K / veryslow / CRF 14 / 120 FPS.
-    Every filter is tuned to squeeze the maximum cinematic quality
-    out of a raw mobile / camera video clip.
+
+    Step 1 — hqdn3d=3:3:4:4     Light denoise → protects fine anime lines.
+    Step 2 — scale spline        Superior drawing/anime edge reproduction.
+    Step 3 — eq                  Deep shadows, high vibrance, zero white-fog.
+    Step 4 — unsharp (light)     Controlled pop without grain artifacts.
+    Step 5 — minterpolate+scd    True 120fps motion + fast-cut protection.
     """
     w, h, fps = profile["width"], profile["height"], profile["fps"]
     wm = _escape_wm(watermark_text)
     font_opt = f":fontfile='{_get_font_file()}'" if _get_font_file() else ""
 
-    # Step A (Clean): Denoise first
-    hqdn3d = "hqdn3d=4:4:5:5"
+    # Step 1 — Light denoise: protects thin anime outlines vs the old 4:4:5:5
+    hqdn3d = "hqdn3d=3:3:4:4"
 
-    # Step B (Upscale): Lanczos NO zscale
-    scale = f"scale={w}:{h}:flags=lanczos"
+    # Step 2 — Spline upscale: cleaner for drawn/anime content than lanczos
+    scale = f"scale={w}:{h}:flags=spline"
 
-    # Step C (Deep HDR Colors): Aggressive CapCut style
-    eq = "eq=contrast=1.25:saturation=1.75:gamma=0.85:brightness=-0.02"
+    # Step 3 — Vibrant Glow Colors: deep shadows, high saturation, no white fog
+    eq = "eq=contrast=1.15:saturation=1.60:gamma=0.95:brightness=-0.01"
 
-    # Step D (Sharpness): Razor-sharp edges
-    unsharp = "unsharp=lx=5:ly=5:la=1.2:cx=5:cy=5:ca=0.8"
+    # Step 4 — Controlled Sharpness: significantly lower than before
+    #           to prevent grainy artifact on anime character outlines
+    unsharp = "unsharp=lx=3:ly=3:la=0.7:cx=3:cy=3:ca=0.2"
 
-    # Step E (True Motion): Force full interpolation
-    minterpolate = f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
+    # Step 5 — Smart Motion: vsbmc=1 for quality + scd=fdiff for scene cuts
+    minterpolate = (
+        f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc"
+        f":vsbmc=1:scd=fdiff"
+    )
 
     filters = [
         "mpdecimate",
