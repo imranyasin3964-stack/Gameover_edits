@@ -289,8 +289,16 @@ def register(app: Client):
             reply_markup=ReplyKeyboardRemove(),
         )
 
+        # ── CRITICAL: Lock in BOTH IDs as plain integers RIGHT NOW ─────────────
+        # These are captured by the do_render closure below.  We extract them
+        # here — before any other await — so the closure NEVER accidentally
+        # picks up the incoming video message's chat/message ID.
+        status_chat_id = status_msg.chat.id   # integer, immutable
+        status_msg_id  = status_msg.id         # integer, immutable
+
         job_id = uuid.uuid4().hex[:8]
-        chat_id = message.chat.id
+        # chat_id for sending the finished document / done message
+        chat_id = status_chat_id
 
         async def do_render():
             input_path  = None
@@ -301,7 +309,8 @@ def register(app: Client):
                 empty  = length - filled
                 return f"{'▰' * filled}{'▱' * empty}"
 
-            status_msg_id = status_msg.id
+            # status_chat_id and status_msg_id are already bound integers
+            # from the outer scope — do NOT reassign them here.
 
             try:
                 # ── Step 1: Download ───────────────────────────────────────────
@@ -320,17 +329,17 @@ def register(app: Client):
                     tot_mb = total / (1024 * 1024)
                     pct = (current / total) * 100 if total > 0 else 0
                     bar = _make_progress_bar_chars(pct, 10)
-                    text = (
+                    await _safe_edit(
+                        client, status_chat_id, status_msg_id,
                         f"📥 <b>DOWNLOADING YOUR VIDEO...</b>\n\n"
                         f"Progress: {bar} {pct:.0f}%\n"
                         f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
                     )
-                    await _safe_edit(client, chat_id, status_msg_id, text)
 
                 await client.download_media(message, file_name=input_path, progress=dl_progress)
 
                 if not os.path.exists(input_path) or os.path.getsize(input_path) < 1000:
-                    await _safe_edit(client, chat_id, status_msg_id, "❌ <b>Download failed. Please try again.</b>")
+                    await _safe_edit(client, status_chat_id, status_msg_id, "❌ <b>Download failed. Please try again.</b>")
                     return
 
                 # ── Step 2: Render ─────────────────────────────────────────────
@@ -347,7 +356,7 @@ def register(app: Client):
                     f"⏱ Elapsed: <code>0s</code>\n"
                     f"⏳ ETA: <code>Calculating...</code>"
                 )
-                await _safe_edit(client, chat_id, status_msg_id, initial_text)
+                await _safe_edit(client, status_chat_id, status_msg_id, initial_text)
 
                 async def progress_cb(info: dict):
                     now = time.time()
@@ -371,7 +380,7 @@ def register(app: Client):
                         f"⏱ Elapsed: <code>{elapsed}</code>\n"
                         f"⏳ ETA: <code>{eta}</code>"
                     )
-                    await _safe_edit(client, chat_id, status_msg_id, text)
+                    await _safe_edit(client, status_chat_id, status_msg_id, text)
 
                 show_wm = not has_watermark_disabled(user.id)
                 output_path = await render_video(
@@ -383,7 +392,7 @@ def register(app: Client):
                 )
 
                 if not output_path:
-                    await _safe_edit(client, chat_id, status_msg_id,
+                    await _safe_edit(client, status_chat_id, status_msg_id,
                         "❌ <b>Render failed!</b>\n"
                         "FFmpeg encountered an error. Please try again."
                     )
@@ -407,7 +416,7 @@ def register(app: Client):
                         f"Progress: {bar} {pct:.0f}%\n"
                         f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
                     )
-                    await _safe_edit(client, chat_id, status_msg_id, text)
+                    await _safe_edit(client, status_chat_id, status_msg_id, text)
 
                 caption = (
                     f"🎬 <b>GAMEOVER EDITS</b>\n\n"
@@ -439,7 +448,7 @@ def register(app: Client):
 
                 # Delete the status message and send a clean done message
                 try:
-                    await status_msg.delete()
+                    await client.delete_messages(chat_id=status_chat_id, message_ids=status_msg_id)
                 except Exception:
                     pass
 
@@ -458,7 +467,7 @@ def register(app: Client):
                 import traceback
                 traceback.print_exc()
                 print(f"[Edit Plugin] ❌ Job {job_id} error: {e}")
-                await _safe_edit(client, chat_id, status_msg_id, f"❌ <b>An unexpected error occurred:</b>\n<code>{e}</code>")
+                await _safe_edit(client, status_chat_id, status_msg_id, f"❌ <b>An unexpected error occurred:</b>\n<code>{e}</code>")
 
             finally:
                 # Always clean up temp files
