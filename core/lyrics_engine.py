@@ -161,7 +161,7 @@ async def render_lyrical_video(
     # 2. Vignette filter for dark cinematic edges
     # 3. Burn subtitles
     # 4. Burn watermark
-    filter_chain = f"color=c=0x0a0f18:s=1920x1080:d={duration},vignette=pi/4,{subtitles_filter},{watermark_filter}"
+    filter_chain = f"color=c=0x0a0f18:s=1920x1080:d={duration},vignette=0.5,{subtitles_filter},{watermark_filter}"
 
     cmd = [
         "ffmpeg", "-y",
