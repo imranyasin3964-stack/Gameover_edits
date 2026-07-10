@@ -97,6 +97,7 @@ def _admin_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
         ["🖥️ Refresh Stats", "🔍 Search User ID"],
         ["💳 Add Credits", "📹 Change Start Video"],
+        ["👥 List Users", "🚫 Watermark Toggle"],
         ["👥 List Active VIPs", "📢 Global Broadcast"],
         ["❌ Close Panel"]
     ], resize_keyboard=True)
@@ -146,6 +147,9 @@ def _build_user_status_card(target_id: int) -> str:
     used_today = get_today_count(target_id)
     expiry_dt  = get_premium_expiry(target_id)
 
+    from core.db import has_watermark_disabled
+    no_wm = has_watermark_disabled(target_id)
+
     from config import Config as _Config
     if vip and target_id == _Config.OWNER_ID:
         vip_str = "💎 <b>Premium (VIP):</b> <code>OWNER — Permanent 👑</code>"
@@ -162,8 +166,9 @@ def _build_user_status_card(target_id: int) -> str:
 
     credits_str  = f"💳 <b>Custom Credits:</b> <code>{credits}</code>"
     used_str     = f"🎬 <b>Edits Used Today:</b> <code>{used_today} / {Config.DAILY_FREE_LIMIT}</code>"
+    wm_str       = f"🏷️ <b>Watermark:</b> <code>{'❌ Disabled (No Watermark)' if no_wm else '✅ Enabled'}</code>"
 
-    return f"{vip_str}\n{credits_str}\n{used_str}"
+    return f"{vip_str}\n{credits_str}\n{used_str}\n{wm_str}"
 
 
 def _user_action_keyboard(target_id: int) -> InlineKeyboardMarkup:
@@ -183,11 +188,67 @@ def _user_action_keyboard(target_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🧹 Clear Credits",     callback_data=f"admin_act|clearcr|{target_id}", style="danger"),
+            InlineKeyboardButton("🏷️ Toggle Watermark",  callback_data=f"admin_act|togwm|{target_id}", style="primary"),
         ],
         [
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="admin_back_main", style="primary"),
         ]
     ])
+
+
+async def _show_users_list_page(client: Client, chat_id: int, page: int, message_to_edit=None):
+    from core.db import list_all_users
+    users = list_all_users()
+    if not users:
+        text = "❌ <b>No registered users found!</b>"
+        if message_to_edit:
+            await message_to_edit.edit_text(text, parse_mode=enums.ParseMode.HTML)
+        else:
+            await client.send_message(chat_id, text, parse_mode=enums.ParseMode.HTML)
+        return
+
+    # Pagination calculation
+    per_page = 8
+    total_pages = (len(users) + per_page - 1) // per_page
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    page_users = users[start_idx:end_idx]
+
+    buttons = []
+    for u in page_users:
+        uid = u["user_id"]
+        fname = u["first_name"] or "User"
+        lname = u["last_name"] or ""
+        name = f"{fname} {lname}".strip()
+        uname = f" (@{u['username']})" if u["username"] else f" ({uid})"
+        button_text = f"👤 {name}{uname}"
+        if len(button_text) > 35:
+            button_text = button_text[:32] + "..."
+        buttons.append([InlineKeyboardButton(button_text, callback_data=f"admin_user_view|{uid}")])
+
+    # Navigation buttons
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_users_page|{page - 1}"))
+    nav_row.append(InlineKeyboardButton(f"Page {page}/{total_pages}", callback_data="admin_noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_users_page|{page + 1}"))
+    buttons.append(nav_row)
+
+    buttons.append([InlineKeyboardButton("🔙 Main Menu", callback_data="admin_back_main", style="primary")])
+
+    text = (
+        f"👥 <b>GAMEOVER EDITS — Registered Users List</b>\n\n"
+        f"Total Registered Users: <code>{len(users)}</code>\n"
+        f"<i>Click a user below to view status and manage them:</i>"
+    )
+
+    if message_to_edit:
+        await message_to_edit.edit_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await client.send_message(chat_id, text, parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 # ── Register ────────────────────────────────────────────────────────────────────
@@ -372,6 +433,41 @@ def register(app: Client):
                 reply_markup=_admin_reply_keyboard()
             )
 
+        elif data.startswith("admin_users_page|"):
+            page = int(data.split("|")[1])
+            await _show_users_list_page(client, chat_id, page, query.message)
+
+        elif data.startswith("admin_user_view|"):
+            target_id = int(data.split("|")[1])
+            status_body = _build_user_status_card(target_id)
+            try:
+                tgt_user   = await client.get_users(target_id)
+                name_line  = (
+                    f"👤 <b>Name:</b> "
+                    f"<a href='tg://user?id={target_id}'>"
+                    f"{tgt_user.first_name} {tgt_user.last_name or ''}</a>\n"
+                )
+                mention_line = (
+                    f"🔗 <b>Username:</b> @{tgt_user.username}\n"
+                    if tgt_user.username else ""
+                )
+            except Exception:
+                name_line    = f"👤 <b>Name:</b> <a href='tg://user?id={target_id}'>Unknown</a>\n"
+                mention_line = ""
+
+            await query.message.edit_text(
+                f"👤 <b>GAMEOVER EDITS — User Status</b>\n\n"
+                f"🆔 <b>User ID:</b> <code>{target_id}</code>\n"
+                f"{name_line}"
+                f"{mention_line}"
+                f"{status_body}",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=_user_action_keyboard(target_id)
+            )
+
+        elif data == "admin_noop":
+            await query.answer()
+
         # 7. Action buttons on User Status card
         elif data.startswith("admin_act|"):
             parts  = data.split("|")
@@ -387,6 +483,12 @@ def register(app: Client):
                 current = get_credits(target_id)
                 add_credits(target_id, -current)
                 await query.answer("Credits cleared!")
+
+            elif action == "togwm":
+                from core.db import toggle_watermark
+                disabled = toggle_watermark(target_id)
+                status_str = "Watermark disabled!" if disabled else "Watermark enabled!"
+                await query.answer(f"🏷️ {status_str}", show_alert=True)
 
             elif action.startswith("give"):
                 # give30 / give7 / give1
@@ -460,6 +562,8 @@ def register(app: Client):
         "🔍 Search User ID",
         "💳 Add Credits",
         "📹 Change Start Video",
+        "👥 List Users",
+        "🚫 Watermark Toggle",
         "👥 List Active VIPs",
         "📢 Global Broadcast",
         "❌ Close Panel"
@@ -523,6 +627,21 @@ def register(app: Client):
                 "📹 <b>Change Welcome /start Video</b>\n\n"
                 "Send or forward the video or GIF you want new users to see on /start.\n\n"
                 "<i>(The bot stores its Telegram File ID — loads instantly for all users.)</i>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
+            )
+
+        elif text == "👥 List Users":
+            await _show_users_list_page(client, message.chat.id, 1)
+
+        elif text == "🚫 Watermark Toggle":
+            set_state(owner_id, "waiting_watermark_toggle", chat_id)
+            await message.reply_text(
+                "🚫 <b>Toggle Watermark for User</b>\n\n"
+                "Please send the numeric <b>User ID</b> of the target user:\n"
+                "Format: <code>[User_ID]</code>\n"
+                "Example: <code>12345678</code>\n\n"
+                "<i>(If currently enabled, it will be disabled. If disabled, it will be enabled.)</i>",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
             )
@@ -640,6 +759,31 @@ def register(app: Client):
                 f"{status_body}",
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=_user_action_keyboard(target_id)
+            )
+
+        # Watermark Remover Toggle State
+        elif step == "waiting_watermark_toggle":
+            if not message.text:
+                await message.reply_text("❌ <b>Please send a numeric User ID in text format!</b>", parse_mode=enums.ParseMode.HTML)
+                return
+
+            clear_state(owner_id)
+            try:
+                target_id = int(message.text.strip())
+            except ValueError:
+                await message.reply_text("❌ <b>Numeric User ID only!</b>", parse_mode=enums.ParseMode.HTML)
+                return
+
+            from core.db import toggle_watermark
+            disabled = toggle_watermark(target_id)
+            status_str = "❌ Disabled (No Watermark on outputs)" if disabled else "✅ Enabled (Outputs will have watermark)"
+
+            await message.reply_text(
+                f"✅ <b>Watermark settings updated!</b>\n\n"
+                f"🆔 <b>User ID:</b> <code>{target_id}</code>\n"
+                f"🏷️ <b>Watermark Status:</b> <code>{status_str}</code>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=_admin_reply_keyboard()
             )
 
         # B. Custom Credits Add

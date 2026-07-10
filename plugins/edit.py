@@ -23,7 +23,7 @@ from pyrogram.types import (
 )
 
 from config import Config
-from core.db import can_edit, record_edit, get_remaining_edits, is_premium
+from core.db import can_edit, record_edit, get_remaining_edits, is_premium, has_watermark_disabled
 from core.states import set_state, get_state, clear_state, is_waiting
 from core.queue import render_queue
 from core.renderer import render_video, QUALITY_PROFILES, INPUT_DIR
@@ -364,11 +364,13 @@ def register(app: Client):
                     )
                     await _safe_edit(client, chat_id, status_msg_id, text)
 
+                show_wm = not has_watermark_disabled(user.id)
                 output_path = await render_video(
                     input_path=input_path,
                     quality_key=quality,
                     watermark_text=Config.WATERMARK_TEXT,
                     progress_callback=progress_cb,
+                    show_watermark=show_wm,
                 )
 
                 if not output_path:

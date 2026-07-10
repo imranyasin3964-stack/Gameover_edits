@@ -99,6 +99,11 @@ def init_db(db_path: str = DB_PATH):
                 key         TEXT PRIMARY KEY,
                 value       TEXT
             );
+
+            -- Users with watermark disabled
+            CREATE TABLE IF NOT EXISTS no_watermark_users (
+                user_id     INTEGER PRIMARY KEY
+            );
         """)
         conn.commit()
 
@@ -457,3 +462,38 @@ def set_setting(key: str, value: str):
 def count_active_premium() -> int:
     """Number of users with a currently-active subscription (owner excluded)."""
     return len(list_premium_users())
+
+
+# ── Watermark Remover Toggles ───────────────────────────────────────────────────
+
+def has_watermark_disabled(user_id: int) -> bool:
+    """Check if a user has their watermark disabled."""
+    with _connect() as conn:
+        row = conn.execute("SELECT 1 FROM no_watermark_users WHERE user_id = ?", (user_id,)).fetchone()
+        return row is not None
+
+
+def toggle_watermark(user_id: int) -> bool:
+    """Toggle watermark status. Returns True if watermark is now disabled, False if enabled."""
+    current = has_watermark_disabled(user_id)
+    with _connect() as conn:
+        if current:
+            conn.execute("DELETE FROM no_watermark_users WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return False
+        else:
+            conn.execute("INSERT OR IGNORE INTO no_watermark_users (user_id) VALUES (?)", (user_id,))
+            conn.commit()
+            return True
+
+
+# ── List Users Directory ─────────────────────────────────────────────────────────
+
+def list_all_users() -> list[dict]:
+    """Retrieve all registered users ordered by joined date."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT user_id, username, first_name, last_name, joined_at "
+            "FROM users ORDER BY joined_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]

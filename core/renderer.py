@@ -183,7 +183,7 @@ def _drawtext(wm: str, font_opt: str, fontsize: int, padding: int, shadow: int) 
 # TIER 1 — 1080p FAST MODE
 # Goal: ~5 minutes. Standard Lanczos scale, basic color grade, 60fps optical flow.
 # ─────────────────────────────────────────────────────────────────────────────
-def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
+def _build_chain_tier1(profile: dict, watermark_text: str, show_watermark: bool = True) -> str:
     """
     Fast chain for 1080p:
       mpdecimate → yadif=1 → scale lanczos → minterpolate=fps=60 (basic flow)
@@ -202,9 +202,10 @@ def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
         "curves=preset=strong_contrast",
         "eq=contrast=1.12:saturation=1.35:gamma=0.96",
         "unsharp=lx=3:ly=3:la=0.4:cx=3:cy=3:ca=0.15",
-        _drawtext(wm, font_opt, fontsize=40, padding=20, shadow=2),
-        "format=yuv420p",
     ]
+    if show_watermark:
+        filters.append(_drawtext(wm, font_opt, fontsize=40, padding=20, shadow=2))
+    filters.append("format=yuv420p")
     return ",".join(filters)
 
 
@@ -212,7 +213,7 @@ def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
 # TIER 2 — 2K PRO MODE
 # Goal: ~10 minutes. Lanczos scale, deeper curves, optical flow motion interpolation (90 FPS).
 # ─────────────────────────────────────────────────────────────────────────────
-def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
+def _build_chain_tier2(profile: dict, watermark_text: str, show_watermark: bool = True) -> str:
     """
     Balance chain for 2K:
       mpdecimate → yadif=1 → scale lanczos → minterpolate=fps=90
@@ -231,9 +232,10 @@ def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
         "curves=r='0/0 0.05/0.02 0.5/0.48 0.95/0.98 1/1':g='0/0 0.05/0.02 0.5/0.46 0.95/0.97 1/1':b='0/0 0.05/0.02 0.5/0.45 0.95/0.96 1/1'",
         "eq=contrast=1.2:saturation=1.5:gamma=0.9",
         "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.25",
-        _drawtext(wm, font_opt, fontsize=60, padding=30, shadow=3),
-        "format=yuv420p",
     ]
+    if show_watermark:
+        filters.append(_drawtext(wm, font_opt, fontsize=60, padding=30, shadow=3))
+    filters.append("format=yuv420p")
     return ",".join(filters)
 
 
@@ -241,7 +243,7 @@ def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
 # TIER 3 — 4K TRUE BEAST MODE
 # Goal: 30-40 minutes. Max CPU. Near-lossless. Cinematic 120 FPS.
 # ─────────────────────────────────────────────────────────────────────────────
-def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
+def _build_chain_tier3(profile: dict, watermark_text: str, show_watermark: bool = True) -> str:
     """
     True Beast Mode chain for 4K / veryslow / CRF 14 / 120 FPS.
     Every filter is tuned to squeeze the maximum cinematic quality
@@ -274,23 +276,24 @@ def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
         eq,
         unsharp,
         minterpolate,
-        _drawtext(wm, font_opt, fontsize=80, padding=40, shadow=4),
-        "format=yuv420p",
     ]
+    if show_watermark:
+        filters.append(_drawtext(wm, font_opt, fontsize=80, padding=40, shadow=4))
+    filters.append("format=yuv420p")
     return ",".join(filters)
 
 
 # ── Dispatch filter chain by tier ──────────────────────────────────────────────
 
-def _build_filter_chain(profile: dict, watermark_text: str) -> str:
+def _build_filter_chain(profile: dict, watermark_text: str, show_watermark: bool = True) -> str:
     """Route to the correct tier-specific filter chain builder."""
     tier = profile.get("tier", 1)
     if tier == 1:
-        return _build_chain_tier1(profile, watermark_text)
+        return _build_chain_tier1(profile, watermark_text, show_watermark)
     elif tier == 2:
-        return _build_chain_tier2(profile, watermark_text)
+        return _build_chain_tier2(profile, watermark_text, show_watermark)
     else:
-        return _build_chain_tier3(profile, watermark_text)
+        return _build_chain_tier3(profile, watermark_text, show_watermark)
 
 
 # ── FFmpeg Command Builder ──────────────────────────────────────────────────────
@@ -365,6 +368,7 @@ async def render_video(
     quality_key: str,
     watermark_text: str,
     progress_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
+    show_watermark: bool = True,
 ) -> Optional[str]:
     """
     Render a video using the GAMEOVER EDITS FFmpeg engine.
@@ -374,6 +378,7 @@ async def render_video(
         quality_key:       One of 'edit60', 'edit90', 'edit120'.
         watermark_text:    Text to burn into the bottom-right corner.
         progress_callback: Async callable that receives a progress dict.
+        show_watermark:    Whether to burn the watermark.
 
     Returns:
         Path to the rendered output file, or None on failure.
@@ -386,7 +391,7 @@ async def render_video(
     job_id      = uuid.uuid4().hex[:8]
     output_path = os.path.join(RENDER_DIR, f"ge_{job_id}_{quality_key}.mp4")
 
-    filter_chain = _build_filter_chain(profile, watermark_text)
+    filter_chain = _build_filter_chain(profile, watermark_text, show_watermark)
     cmd          = _build_ffmpeg_cmd(input_path, output_path, profile, filter_chain)
 
     print(f"[Renderer] 🚀 Starting job {job_id} | Quality: {profile['label']}")
