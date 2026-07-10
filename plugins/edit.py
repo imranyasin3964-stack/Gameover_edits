@@ -81,15 +81,18 @@ def register(app: Client):
         "💎 4K Beast Mode (VIP)": "edit120",
     }
 
+    def is_quality_btn(_, __, message: Message) -> bool:
+        if not message.text:
+            return False
+        return message.text.strip() in MAP_TEXT_TO_QUALITY
+
     @app.on_message(
-        filters.text
+        filters.create(is_quality_btn)
         & filters.incoming
         & filters.private
     )
     async def quality_selection_message_handler(client: Client, message: Message):
         text = message.text.strip()
-        if text not in MAP_TEXT_TO_QUALITY:
-            return  # Allow other handlers to process it (like /admin buttons or Cancel)
 
         user = message.from_user
         if not user:
@@ -162,18 +165,20 @@ def register(app: Client):
             reply_markup=ReplyKeyboardRemove()
         )
 
-    @app.on_message(filters.text & filters.regex(r"^❌ Cancel$") & filters.private)
+    def is_cancel_for_video_edit(_, __, message: Message) -> bool:
+        if not message.from_user or not message.text:
+            return False
+        if message.text.strip() != "❌ Cancel":
+            return False
+        state = get_state(message.from_user.id)
+        return state and state.get("quality") in QUALITY_PROFILES
+
+    @app.on_message(filters.create(is_cancel_for_video_edit) & filters.private)
     async def cancel_message_handler(client: Client, message: Message):
         user = message.from_user
         if not user:
             return
         
-        # Only run edit cancel if the user has an active quality edit state.
-        # This prevents hijacking admin inputs (waiting_search_id, etc.)!
-        state = get_state(user.id)
-        if not state or state.get("quality", "") not in QUALITY_PROFILES:
-            return  # Let other handlers (like admin.py) handle it!
-            
         clear_state(user.id)
         await message.reply_text(
             "❌ <b>Cancelled.</b> Send /edit to start again.",
@@ -183,21 +188,25 @@ def register(app: Client):
 
     # ── Video Message Handler ──────────────────────────────────────────────────
 
-    @app.on_message(filters.video | filters.document)
+    def is_waiting_for_video_edit(_, __, message: Message) -> bool:
+        if not message.from_user:
+            return False
+        state = get_state(message.from_user.id)
+        if not state:
+            return False
+        return state.get("quality") in QUALITY_PROFILES
+
+    @app.on_message(
+        (filters.video | filters.document)
+        & filters.create(is_waiting_for_video_edit)
+    )
     async def video_handler(client: Client, message: Message):
         user = message.from_user
         if not user:
             return
 
-        # Only handle if user has an active quality-selection state
         state = get_state(user.id)
-        if not state:
-            return  # Ignore — user hasn't typed /edit yet
-
         quality = state["quality"]
-        if quality not in QUALITY_PROFILES:
-            return  # Ignore admin/broadcast inputs
-
         profile = QUALITY_PROFILES.get(quality)
         if not profile:
             clear_state(user.id)
