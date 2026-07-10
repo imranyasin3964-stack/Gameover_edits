@@ -6,6 +6,7 @@ Lyrical status command and flow handler
 import os
 import time
 import uuid
+import asyncio
 import traceback
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
