@@ -183,10 +183,14 @@ def _drawtext(wm: str, font_opt: str) -> str:
 # TIER 1 — 1080p FAST MODE
 # Goal: ~5 minutes. Standard bicubic upscale, basic color grade.
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 1 — 1080p FAST MODE
+# Goal: ~5 minutes. Standard Lanczos scale, basic color grade, 60fps optical flow.
+# ─────────────────────────────────────────────────────────────────────────────
 def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
     """
     Fast chain for 1080p:
-      mpdecimate → yadif=1 → zscale bicubic → fps=60
+      mpdecimate → yadif=1 → scale lanczos → minterpolate=fps=60 (basic flow)
       → curves strong → eq(deep contrast/sat) → unsharp(light)
       → drawtext → format=yuv420p
     """
@@ -197,8 +201,8 @@ def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
     filters = [
         "mpdecimate",
         "yadif=mode=1",
-        f"zscale=w={w}:h={h}:filter=bicubic:dither=random",
-        f"fps={fps}",
+        f"scale={w}:{h}:flags=lanczos",
+        f"minterpolate=fps={fps}:mi_mode=mci",
         "curves=preset=strong_contrast",
         "eq=contrast=1.12:saturation=1.35:gamma=0.96",
         "unsharp=lx=3:ly=3:la=0.4:cx=3:cy=3:ca=0.15",
@@ -210,12 +214,12 @@ def _build_chain_tier1(profile: dict, watermark_text: str) -> str:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TIER 2 — 2K PRO MODE
-# Goal: ~10 minutes. Lanczos scale, deeper curves, optical flow motion interpolation.
+# Goal: ~10 minutes. Lanczos scale, deeper curves, optical flow motion interpolation (90 FPS).
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
     """
     Balance chain for 2K:
-      mpdecimate → yadif=1 → zscale lanczos → framerate=fps=90
+      mpdecimate → yadif=1 → scale lanczos → minterpolate=fps=90
       → curves(deep blacks) → eq(cinematic sat/gamma) → unsharp(medium)
       → drawtext → format=yuv420p
     """
@@ -226,10 +230,10 @@ def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
     filters = [
         "mpdecimate",
         "yadif=mode=1",
-        f"zscale=w={w}:h={h}:filter=lanczos:dither=random",
-        f"framerate=fps={fps}",
+        f"scale={w}:{h}:flags=lanczos",
+        f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc",
         "curves=r='0/0 0.05/0.02 0.5/0.48 0.95/0.98 1/1':g='0/0 0.05/0.02 0.5/0.46 0.95/0.97 1/1':b='0/0 0.05/0.02 0.5/0.45 0.95/0.96 1/1'",
-        "eq=contrast=1.15:saturation=1.40:gamma=0.95",
+        "eq=contrast=1.2:saturation=1.5:gamma=0.9",
         "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.25",
         _drawtext(wm, font_opt),
         "format=yuv420p",
@@ -239,7 +243,7 @@ def _build_chain_tier2(profile: dict, watermark_text: str) -> str:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TIER 3 — 4K TRUE BEAST MODE
-# Goal: 25-30 minutes. Max CPU. Near-lossless. Cinematic.
+# Goal: 30-40 minutes. Max CPU. Near-lossless. Cinematic 120 FPS.
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
     """
@@ -251,38 +255,29 @@ def _build_chain_tier3(profile: dict, watermark_text: str) -> str:
     wm = _escape_wm(watermark_text)
     font_opt = f":fontfile='{_get_font_file()}'" if _get_font_file() else ""
 
-    hqdn3d = "hqdn3d=luma_spatial=4:luma_tmp=3:chroma_spatial=3:chroma_tmp=2.5"
+    # Step A (Clean): Denoise first
+    hqdn3d = "hqdn3d=4:4:5:5"
 
-    zscale = (
-        f"zscale=w={w}:h={h}"
-        ":filter=spline36"
-        ":dither=random"
-        ":primaries=709"
-        ":transfer=709"
-        ":matrix=709"
-    )
+    # Step B (Upscale): Lanczos NO zscale
+    scale = f"scale={w}:{h}:flags=lanczos"
 
-    # Cinema S-curve per-channel RGB (blacks start exactly at 0/0 to avoid washed-out look)
-    curves = (
-        "curves="
-        "r='0/0 0.05/0.02 0.30/0.25 0.50/0.48 0.75/0.75 0.95/0.96 1/1'"
-        ":g='0/0 0.05/0.02 0.30/0.26 0.50/0.48 0.75/0.76 0.95/0.97 1/1'"
-        ":b='0/0 0.05/0.02 0.30/0.24 0.50/0.46 0.75/0.74 0.95/0.95 1/1'"
-    )
+    # Step C (Deep HDR Colors): Aggressive CapCut style
+    eq = "eq=contrast=1.25:saturation=1.75:gamma=0.85:brightness=-0.02"
 
-    eq = "eq=contrast=1.18:saturation=1.45:gamma=0.92"
+    # Step D (Sharpness): Razor-sharp edges
+    unsharp = "unsharp=lx=5:ly=5:la=1.2:cx=5:cy=5:ca=0.8"
 
-    unsharp = "unsharp=lx=5:ly=5:la=0.8:cx=5:cy=5:ca=0.35"
+    # Step E (True Motion): Force full interpolation
+    minterpolate = f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
 
     filters = [
         "mpdecimate",
         "yadif=mode=1",
         hqdn3d,
-        zscale,
-        f"framerate=fps={fps}",
-        curves,
+        scale,
         eq,
         unsharp,
+        minterpolate,
         _drawtext(wm, font_opt),
         "format=yuv420p",
     ]
