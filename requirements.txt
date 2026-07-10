@@ -23,3 +23,4 @@ openai-whisper
 # Google Drive API (Phase 1 — Drive Bridge)
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0

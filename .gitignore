@@ -6,6 +6,10 @@ gameedit.db
 # Google Service Account key — NEVER commit this!
 credentials.json
 
+# Google User OAuth2 keys — NEVER commit these!
+client_secrets.json
+token.json
+
 # ── Temp/output files ──────────────────────────────────────────────────────────
 downloads/
 __pycache__/

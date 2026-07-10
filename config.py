@@ -43,8 +43,9 @@ class Config:
     WATERMARK_FONT: str = os.getenv("WATERMARK_FONT", "")
 
     # ── Google Drive (Phase 1 — Drive Bridge) ─────────────────────────────────
-    # Path to the Service Account credentials JSON file (headless auth, no browser).
-    DRIVE_CREDENTIALS_PATH: str = os.getenv("DRIVE_CREDENTIALS_PATH", "credentials.json")
+    # Path to the User OAuth2 credentials token file (token.json).
+    # Allows headless auth with auto-refresh to run under user space quota (15GB).
+    DRIVE_TOKEN_PATH: str = os.getenv("DRIVE_TOKEN_PATH", "token.json")
 
     # Google Drive Folder IDs — get these from the Drive folder URL:
     #   https://drive.google.com/drive/folders/<THIS_IS_THE_FOLDER_ID>
@@ -87,5 +88,5 @@ class Config:
         return bool(
             Config.DRIVE_INPUT_FOLDER_ID
             and Config.DRIVE_OUTPUT_FOLDER_ID
-            and os.path.isfile(Config.DRIVE_CREDENTIALS_PATH)
+            and os.path.isfile(Config.DRIVE_TOKEN_PATH)
         )

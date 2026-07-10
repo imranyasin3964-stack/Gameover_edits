@@ -32,14 +32,15 @@ import logging
 
 # ── Google API imports ─────────────────────────────────────────────────────────
 try:
-    from google.oauth2 import service_account
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
     from googleapiclient.errors import HttpError
 except ImportError:
     print(
         "[DriveManager] ❌ Google API libraries not installed!\n"
-        "Run: pip install google-api-python-client google-auth",
+        "Run: pip install google-api-python-client google-auth google-auth-oauthlib",
         file=sys.stderr
     )
     raise
@@ -60,22 +61,22 @@ _drive_service = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. AUTHENTICATE
+# 1. AUTHENTICATE (User OAuth2)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def authenticate_drive():
     """
-    Initialize (or return cached) Google Drive API service using a Service Account.
+    Initialize (or return cached) Google Drive API service using User OAuth2 credentials.
 
-    Reads the path to credentials.json from the environment variable
-    DRIVE_CREDENTIALS_PATH (default: 'credentials.json').
+    Loads the user OAuth token from the file specified by DRIVE_TOKEN_PATH in config.py
+    (default: 'token.json'). Auto-refreshes the token if expired.
 
     Returns:
         googleapiclient.discovery.Resource — authenticated Drive v3 service object
 
     Raises:
-        FileNotFoundError  — if credentials.json doesn't exist at the configured path
-        Exception          — if Google auth fails for any other reason
+        FileNotFoundError  — if token.json doesn't exist at the configured path
+        Exception          — if Google auth or token refresh fails
     """
     global _drive_service
 
@@ -86,26 +87,34 @@ def authenticate_drive():
     # Import here to avoid circular import if config is not yet loaded
     from config import Config
 
-    creds_path = Config.DRIVE_CREDENTIALS_PATH
+    token_path = Config.DRIVE_TOKEN_PATH
 
-    if not os.path.isfile(creds_path):
+    if not os.path.isfile(token_path):
         raise FileNotFoundError(
-            f"[DriveManager] credentials.json not found at: '{creds_path}'\n"
-            f"Please download your Service Account JSON from Google Cloud Console\n"
-            f"and place it at the path specified by DRIVE_CREDENTIALS_PATH in .env"
+            f"[DriveManager] token.json not found at: '{token_path}'\n"
+            f"Please generate it on your local PC using generate_token.py\n"
+            f"and place it at the path specified by DRIVE_TOKEN_PATH in .env"
         )
 
     try:
-        credentials = service_account.Credentials.from_service_account_file(
-            creds_path, scopes=_SCOPES
-        )
-        service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+        creds = Credentials.from_authorized_user_file(token_path, _SCOPES)
+        
+        # Check if the token is expired and refresh it automatically
+        if creds and creds.expired and creds.refresh_token:
+            logger.info("🔄 Google Drive User Token expired. Refreshing...")
+            creds.refresh(Request())
+            # Save the refreshed token back to disk
+            with open(token_path, "w") as token:
+                token.write(creds.to_json())
+            logger.info("💾 Refreshed token saved to disk.")
+
+        service = build("drive", "v3", credentials=creds, cache_discovery=False)
         _drive_service = service
-        logger.info("✅ Authenticated successfully with Google Drive API.")
+        logger.info("✅ Authenticated successfully with Google Drive API (User OAuth2).")
         return _drive_service
 
     except Exception as exc:
-        logger.error(f"❌ Authentication failed: {exc}")
+        logger.error(f"❌ OAuth2 Authentication failed: {exc}")
         raise
 
 
@@ -368,6 +377,11 @@ if __name__ == "__main__":
     Run from the bot root:
         python core/drive_manager.py
     """
+    import sys
+    import os
+    # Add parent directory to path so Config can be imported
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
     print("=" * 60)
     print("  GAMEOVER EDITS — Drive Manager Self-Test")
     print("=" * 60)
