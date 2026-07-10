@@ -90,6 +90,27 @@ async def process_lofi_audio(input_path: str, output_path: str) -> bool:
         return False
 
 
+async def extract_audio_from_video(video_path: str, audio_path: str) -> bool:
+    """Extract audio stream from a video file using FFmpeg."""
+    cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-vn", "-ac", "2", "-ar", "44100", "-ab", "192k",
+        audio_path
+    ]
+    print(f"[Lyrics Engine] Extracting audio from video: {' '.join(cmd)}")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL
+        )
+        await proc.wait()
+        return os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000
+    except Exception as e:
+        print(f"[Lyrics Engine] Audio extraction failed: {e}")
+        return False
+
+
 def transcribe_audio_to_srt(audio_path: str, srt_path: str) -> bool:
     """Load Whisper 'base' model and transcribe audio, saving as SRT."""
     print(f"[Lyrics Engine] Transcribing audio with Whisper base model...")

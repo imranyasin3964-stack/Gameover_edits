@@ -17,7 +17,8 @@ from core.lyrics_engine import (
     get_audio_duration,
     process_lofi_audio,
     transcribe_audio_to_srt,
-    render_lyrical_video
+    render_lyrical_video,
+    extract_audio_from_video
 )
 from plugins.edit import _safe_edit
 
@@ -89,15 +90,26 @@ def register(app: Client):
             )
             return
 
-        # Ensure attachment is audio or voice note
-        audio_obj = message.audio or message.voice or message.document
-        is_doc_audio = False
-        if message.document and message.document.mime_type and message.document.mime_type.startswith("audio/"):
-            is_doc_audio = True
+        # Ensure attachment is audio, voice note, video, or valid doc format
+        audio_obj = message.audio or message.voice or message.video or message.document
+        is_media_ok = False
+        is_video = False
 
-        if not audio_obj or (message.document and not is_doc_audio):
+        if message.audio or message.voice or message.video:
+            is_media_ok = True
+            if message.video:
+                is_video = True
+        elif message.document and message.document.mime_type:
+            mime = message.document.mime_type
+            if mime.startswith("audio/"):
+                is_media_ok = True
+            elif mime.startswith("video/"):
+                is_media_ok = True
+                is_video = True
+
+        if not is_media_ok:
             await message.reply_text(
-                "❌ <b>Please send a valid Audio file or Voice note!</b>",
+                "❌ <b>Please send a valid Audio, Video, or Voice note!</b>",
                 parse_mode=enums.ParseMode.HTML
             )
             return
@@ -131,20 +143,25 @@ def register(app: Client):
         )
         status_msg_id = status_msg.id
 
+        raw_video_path = None
         input_audio_path = None
         lofi_audio_path = None
         srt_path = None
         output_video_path = None
 
         try:
-            # ── Step 1: Download Audio ─────────────────────────────────────────
-            ext = ".mp3"
-            if message.audio and message.audio.file_name:
-                _, fext = os.path.splitext(message.audio.file_name)
+            # ── Step 1: Download Media ─────────────────────────────────────────
+            ext = ".mp4" if is_video else ".mp3"
+            
+            # Determine appropriate extension from downloaded media
+            target_media = message.audio or message.voice or message.video or message.document
+            if target_media and hasattr(target_media, "file_name") and target_media.file_name:
+                _, fext = os.path.splitext(target_media.file_name)
                 if fext:
                     ext = fext
 
-            input_audio_path = os.path.join(INPUT_DIR, f"ly_in_{job_id}{ext}")
+            download_target_path = os.path.join(INPUT_DIR, f"ly_dl_{job_id}{ext}")
+            input_audio_path = os.path.join(INPUT_DIR, f"ly_in_{job_id}.mp3")
             lofi_audio_path = os.path.join(INPUT_DIR, f"ly_lofi_{job_id}.wav")
             srt_path = os.path.join(INPUT_DIR, f"ly_subs_{job_id}.srt")
             output_video_path = os.path.join(RENDER_DIR, f"ly_out_{job_id}.mp4")
@@ -161,17 +178,28 @@ def register(app: Client):
                 tot_mb = total / (1024 * 1024)
                 pct = (current / total) * 100 if total > 0 else 0
                 bar = _make_progress_bar_chars(pct, 10)
+                media_label = "VIDEO" if is_video else "AUDIO"
                 text = (
-                    f"📥 <b>DOWNLOADING AUDIO TRACK...</b>\n\n"
+                    f"📥 <b>DOWNLOADING {media_label} TRACK...</b>\n\n"
                     f"Progress: {bar} {pct:.0f}%\n"
                     f"📦 Size: <code>{cur_mb:.1f} MB / {tot_mb:.1f} MB</code>"
                 )
                 await _safe_edit(client, chat_id, status_msg_id, text)
 
-            await client.download_media(message, file_name=input_audio_path, progress=dl_progress)
+            await client.download_media(message, file_name=download_target_path, progress=dl_progress)
 
-            if not os.path.exists(input_audio_path) or os.path.getsize(input_audio_path) < 500:
+            if not os.path.exists(download_target_path) or os.path.getsize(download_target_path) < 500:
                 raise ValueError("Downloaded file is empty or corrupted.")
+
+            # If it is a video, extract the audio stream first
+            if is_video:
+                raw_video_path = download_target_path
+                await _safe_edit(client, chat_id, status_msg_id, "🔊 <b>EXTRACTING AUDIO STREAM FROM VIDEO...</b>\n\n<i>Please wait...</i>")
+                extract_ok = await extract_audio_from_video(raw_video_path, input_audio_path)
+                if not extract_ok:
+                    raise ValueError("Could not extract audio track from video.")
+            else:
+                input_audio_path = download_target_path
 
             duration = await get_audio_duration(input_audio_path)
             if duration <= 0:
@@ -310,7 +338,7 @@ def register(app: Client):
 
         finally:
             # Clean up temp files
-            for p in [input_audio_path, lofi_audio_path, srt_path, output_video_path]:
+            for p in [raw_video_path, input_audio_path, lofi_audio_path, srt_path, output_video_path]:
                 if p and os.path.exists(p):
                     try:
                         os.remove(p)

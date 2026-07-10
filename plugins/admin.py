@@ -687,9 +687,11 @@ def register(app: Client):
         if not message.from_user:
             return False
         state = get_state(message.from_user.id)
-        if state and state.get("quality", "").startswith("waiting_"):
-            return True
-        return False
+        if not state:
+            return False
+        q = state.get("quality", "")
+        # Only admin states, exclude plugins/lyrical states
+        return q.startswith("waiting_") and q not in ["waiting_lyrical_audio"]
 
     # ── Message Input Handler (Handles all owner states: Search, Credits, Start Video, Broadcast) ──
     @app.on_message(
